@@ -13,11 +13,11 @@ shell_scripts=(
 
 bash -n "${shell_scripts[@]}"
 shellcheck "${shell_scripts[@]}"
-docker compose \
+SCRAP_MONITORING_VISUALIZER_ENV_FILE="$PWD/.env.example" docker compose \
   --env-file .env.example \
   --file deploy/server/compose.yml \
   config --quiet --no-env-resolution --no-path-resolution
-docker compose \
+SCRAP_MONITORING_VISUALIZER_ENV_FILE="$PWD/.env.example" docker compose \
   --env-file .env.example \
   --file deploy/server/compose.yml \
   --file deploy/server/compose.gpu.yml \
