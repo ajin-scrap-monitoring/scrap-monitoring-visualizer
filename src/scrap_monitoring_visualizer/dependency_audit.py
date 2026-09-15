@@ -19,8 +19,9 @@ DIRECT_PYTHON_DEPENDENCIES = {
     "pyvista",
     "uvicorn",
     "vtk",
+    "websockets",
 }
-DIRECT_DEBIAN_DEPENDENCIES = {"libosmesa6"}
+DIRECT_DEBIAN_DEPENDENCIES = {"libegl1", "libgl1", "libosmesa6"}
 PROJECT_DISTRIBUTION = "scrap-monitoring-visualizer"
 LICENSE_MARKERS = ("LICENSE", "COPYING", "COPYRIGHT")
 NOTICE_MARKERS = (*LICENSE_MARKERS, "NOTICE", "AUTHORS")

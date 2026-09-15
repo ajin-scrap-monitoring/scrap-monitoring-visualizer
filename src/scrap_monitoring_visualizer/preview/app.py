@@ -24,12 +24,14 @@ _INDEX_HTML = """<!doctype html>
     main{max-width:1400px;margin:auto;padding:24px}
     figure{margin:0}
     figcaption{font-weight:600;margin:0 0 8px}
+    nav{margin:0 0 12px}
     img{display:block;width:100%;background:#fff;border:1px solid #9aa0a6}
     pre{white-space:pre-wrap;background:#fff;border:1px solid #dadce0;padding:12px}
   </style>
 </head>
 <body><main>
   <h1>Scrap Monitoring Visualizer</h1>
+  <nav><a id="camera-link" href="/camera/" hidden>Open synthetic camera</a></nav>
   <figure><figcaption>3D model</figcaption>
     <img id="frame" alt="Latest rendered observation">
   </figure>
@@ -37,12 +39,14 @@ _INDEX_HTML = """<!doctype html>
 </main><script>
 const frame=document.getElementById("frame");
 const statusNode=document.getElementById("status");
+const cameraLink=document.getElementById("camera-link");
 let displayedRevision=null;
 async function refresh(){
   try{
     const response=await fetch("/status",{cache:"no-store"});
     const status=await response.json();
     statusNode.textContent=JSON.stringify(status,null,2);
+    cameraLink.hidden=status.synthetic_camera?.camera_enabled!==true;
     if(status.frame_revision!==null&&status.frame_revision!==displayedRevision){
       frame.src="/frame.png?revision="+status.frame_revision;
       displayedRevision=status.frame_revision;

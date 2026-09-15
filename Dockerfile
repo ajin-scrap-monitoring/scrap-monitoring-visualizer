@@ -17,6 +17,8 @@ FROM ${PYTHON_IMAGE} AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        libegl1=1.6.0-1 \
+        libgl1=1.6.0-1 \
         libosmesa6=22.3.6-1+deb12u2 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,7 +31,7 @@ COPY --from=builder --chown=visualizer:visualizer /app /app
 COPY --chown=visualizer:visualizer THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 
 ARG BUILD_REVISION=unknown
-ARG BUILD_VERSION=1.0.1
+ARG BUILD_VERSION=1.1.0
 
 LABEL org.opencontainers.image.description="Headless 3D visualizer for Scrap Monitoring LiDAR observations" \
       org.opencontainers.image.revision="${BUILD_REVISION}" \

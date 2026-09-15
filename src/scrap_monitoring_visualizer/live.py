@@ -25,6 +25,11 @@ from scrap_monitoring_visualizer.rendering.worker import (
     RenderRequest,
 )
 from scrap_monitoring_visualizer.state import ExecutionState
+from scrap_monitoring_visualizer.synthetic_camera import (
+    SyntheticCameraConfig,
+    SyntheticCameraPipeline,
+    install_camera_routes,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +40,7 @@ class LiveConfig:
     http_port: int
     width: int = DEFAULT_FRAME_WIDTH
     height: int = DEFAULT_FRAME_HEIGHT
+    synthetic_camera: SyntheticCameraConfig | None = None
 
     def validate(self) -> None:
         if not self.tcp_host or not self.http_host:
@@ -44,6 +50,8 @@ class LiveConfig:
         if self.tcp_host == self.http_host and self.tcp_port == self.http_port:
             raise ValueError("TCP and HTTP endpoints must be different")
         RenderConfig(width=self.width, height=self.height).validate()
+        if self.synthetic_camera is not None:
+            self.synthetic_camera.validate()
 
 
 class LiveCoordinator:
@@ -52,10 +60,12 @@ class LiveCoordinator:
         frames: LatestFrameStore,
         worker: LatestRenderWorker,
         render_config: RenderConfig,
+        camera: SyntheticCameraPipeline | None = None,
     ) -> None:
         self._frames = frames
         self._worker = worker
         self._render_config = render_config
+        self._camera = camera
         self._receiver: ObservationReceiver | None = None
         self._state = ExecutionState()
         self._last_received_sequence: int | None = None
@@ -66,6 +76,8 @@ class LiveCoordinator:
 
     def state_changed(self, state: ExecutionState) -> None:
         self._state = state
+        if self._camera is not None:
+            self._camera.state_changed(state)
         observation = state.observation
         if observation is None:
             self._worker.invalidate()
@@ -91,7 +103,7 @@ class LiveCoordinator:
         receiver_snapshot = (
             self._receiver.snapshot if self._receiver is not None else None
         )
-        return {
+        status: dict[str, Any] = {
             "connected": self._state.connected,
             "run_id": self._state.header.run_id
             if self._state.header is not None
@@ -114,6 +126,19 @@ class LiveCoordinator:
             ),
             "render_error": self._worker.last_error,
         }
+        status["synthetic_camera"] = (
+            dict(self._camera.status())
+            if self._camera is not None
+            else {"camera_enabled": False}
+        )
+        return status
+
+    def poll_renderers(self) -> None:
+        self._worker.poll()
+        if not self._worker.is_alive:
+            raise RuntimeError("browser renderer process exited")
+        if self._camera is not None:
+            self._camera.poll()
 
 
 async def run_live(config: LiveConfig) -> int:
@@ -121,10 +146,22 @@ async def run_live(config: LiveConfig) -> int:
     frames = LatestFrameStore()
     worker = LatestRenderWorker(frames)
     worker.start()
+    camera = (
+        SyntheticCameraPipeline(config.synthetic_camera)
+        if config.synthetic_camera is not None
+        else None
+    )
+    if camera is not None:
+        try:
+            camera.start()
+        except Exception:
+            worker.close()
+            raise
     coordinator = LiveCoordinator(
         frames,
         worker,
         RenderConfig(width=config.width, height=config.height),
+        camera,
     )
     receiver = ObservationReceiver(ContractParser(), on_state=coordinator.state_changed)
     coordinator.bind_receiver(receiver)
@@ -133,9 +170,18 @@ async def run_live(config: LiveConfig) -> int:
             receiver.handle_client, config.tcp_host, config.tcp_port
         )
     except Exception:
+        if camera is not None:
+            camera.close()
         worker.close()
         raise
     app = create_preview_app(frames, coordinator.status)
+    if camera is not None:
+        install_camera_routes(
+            app,
+            camera.store,
+            camera.status,
+            camera.config.video.fps,
+        )
     uvicorn_server = uvicorn.Server(
         uvicorn.Config(
             app,
@@ -144,13 +190,23 @@ async def run_live(config: LiveConfig) -> int:
             access_log=False,
             log_level="info",
             timeout_keep_alive=5,
+            ws_max_queue=1,
+            ws_max_size=4_096,
+            ws_per_message_deflate=False,
         )
     )
 
+    poll_error: Exception | None = None
+
     async def poll_renderer() -> None:
-        while not uvicorn_server.should_exit:
-            worker.poll()
-            await asyncio.sleep(0.02)
+        nonlocal poll_error
+        try:
+            while not uvicorn_server.should_exit:
+                coordinator.poll_renderers()
+                await asyncio.sleep(0.005)
+        except Exception as error:
+            poll_error = error
+            uvicorn_server.should_exit = True
 
     poll_task = asyncio.create_task(poll_renderer())
     try:
@@ -160,7 +216,17 @@ async def run_live(config: LiveConfig) -> int:
         uvicorn_server.should_exit = True
         tcp_server.close()
         await tcp_server.wait_closed()
-        await poll_task
-        worker.poll()
-        worker.close()
+        try:
+            await poll_task
+        finally:
+            try:
+                try:
+                    worker.poll()
+                finally:
+                    worker.close()
+            finally:
+                if camera is not None:
+                    camera.close()
+    if poll_error is not None:
+        raise RuntimeError("render polling failed") from poll_error
     return 0

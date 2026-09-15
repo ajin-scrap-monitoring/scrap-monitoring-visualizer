@@ -13,7 +13,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -37,6 +37,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups
 
+      - name: Validate edge bridge dependency notices
+        run: |
+          cargo install --locked --version 0.9.2 --features cli cargo-about
+          cargo install --locked --version 0.22.2 cargo-audit
+          python3 tools/generate_edge_bridge_notices.py --check
+          cargo audit --file edge-bridge/Cargo.lock
+
       - name: Validate release target
         id: release
         shell: bash
@@ -46,12 +53,16 @@ jobs:
             --tag "$GITHUB_REF_NAME" \
             --revision "$GITHUB_SHA"
           version="${GITHUB_REF_NAME#v}"
-          image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          visualizer_image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          edge_bridge_image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/scrap-monitoring-visualizer-edge-bridge"
           {
-            echo "image_name=$image_name"
-            echo "revision_ref=$image_name:sha-$GITHUB_SHA"
             echo "version=$version"
-            echo "version_ref=$image_name:$version"
+            echo "visualizer_image_name=$visualizer_image_name"
+            echo "visualizer_revision_ref=$visualizer_image_name:sha-$GITHUB_SHA"
+            echo "visualizer_version_ref=$visualizer_image_name:$version"
+            echo "edge_bridge_image_name=$edge_bridge_image_name"
+            echo "edge_bridge_revision_ref=$edge_bridge_image_name:sha-$GITHUB_SHA"
+            echo "edge_bridge_version_ref=$edge_bridge_image_name:$version"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate source
@@ -63,12 +74,28 @@ jobs:
           uv run --frozen mypy
           uv run --frozen python -m pytest
           uv run --frozen python -m compileall -q src tests tools
+          scripts/check-deployment.sh
+          docker build \
+            --file Dockerfile.edge-bridge \
+            --target test \
+            --tag scrap-monitoring-visualizer-edge-bridge:test \
+            .
 
       - name: Build Python package
         run: uv build --no-sources
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          version: v0.37.1
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -80,40 +107,89 @@ jobs:
       - name: Check existing image tags
         id: existing
         env:
-          REVISION_REF: ${{ steps.release.outputs.revision_ref }}
-          VERSION_REF: ${{ steps.release.outputs.version_ref }}
+          EDGE_BRIDGE_REVISION_REF: ${{ steps.release.outputs.edge_bridge_revision_ref }}
+          EDGE_BRIDGE_VERSION_REF: ${{ steps.release.outputs.edge_bridge_version_ref }}
+          VISUALIZER_REVISION_REF: ${{ steps.release.outputs.visualizer_revision_ref }}
+          VISUALIZER_VERSION_REF: ${{ steps.release.outputs.visualizer_version_ref }}
         shell: bash
         run: |
-          version_digest="$(
-            docker buildx imagetools inspect "$VERSION_REF" \
-              --format '{{.Manifest.Digest}}' 2>/dev/null || true
-          )"
-          revision_digest="$(
-            docker buildx imagetools inspect "$REVISION_REF" \
-              --format '{{.Manifest.Digest}}' 2>/dev/null || true
-          )"
-          if [[ -z "$version_digest" && -z "$revision_digest" ]]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$version_digest" =~ ^sha256:[0-9a-f]{64}$ && \
-                  "$version_digest" == "$revision_digest" ]]; then
-            echo "digest=$version_digest" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release image tags are incomplete or inconsistent" >&2
-            exit 1
-          fi
+          inspect_digest() {
+            local image_ref="$1"
+            local error_path="$RUNNER_TEMP/image-inspect-error"
+            local digest
+            if digest="$(
+              docker buildx imagetools inspect "$image_ref" \
+                --format '{{.Manifest.Digest}}' 2> "$error_path"
+            )"; then
+              if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "invalid manifest digest for $image_ref: $digest" >&2
+                return 1
+              fi
+              printf '%s' "$digest"
+              return 0
+            fi
+            if grep --quiet --ignore-case --extended-regexp \
+              'manifest unknown|name unknown|not found' "$error_path"; then
+              return 0
+            fi
+            cat "$error_path" >&2
+            return 1
+          }
+          check_tag_pair() {
+            local output_prefix="$1"
+            local version_ref="$2"
+            local revision_ref="$3"
+            local version_digest
+            local revision_digest
+            version_digest="$(inspect_digest "$version_ref")"
+            revision_digest="$(inspect_digest "$revision_ref")"
+            if [[ -z "$version_digest" && -z "$revision_digest" ]]; then
+              echo "${output_prefix}_publish=true" >> "$GITHUB_OUTPUT"
+            elif [[ "$version_digest" =~ ^sha256:[0-9a-f]{64}$ && \
+                    "$version_digest" == "$revision_digest" ]]; then
+              {
+                echo "${output_prefix}_digest=$version_digest"
+                echo "${output_prefix}_publish=false"
+              } >> "$GITHUB_OUTPUT"
+            elif [[ "$version_digest" =~ ^sha256:[0-9a-f]{64}$ && \
+                    -z "$revision_digest" ]]; then
+              {
+                echo "${output_prefix}_digest=$version_digest"
+                echo "${output_prefix}_missing_ref=$revision_ref"
+                echo "${output_prefix}_publish=false"
+              } >> "$GITHUB_OUTPUT"
+            elif [[ -z "$version_digest" && \
+                    "$revision_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              {
+                echo "${output_prefix}_digest=$revision_digest"
+                echo "${output_prefix}_missing_ref=$version_ref"
+                echo "${output_prefix}_publish=false"
+              } >> "$GITHUB_OUTPUT"
+            else
+              echo "$output_prefix release image tags are incomplete or inconsistent" >&2
+              exit 1
+            fi
+          }
+          check_tag_pair \
+            visualizer \
+            "$VISUALIZER_VERSION_REF" \
+            "$VISUALIZER_REVISION_REF"
+          check_tag_pair \
+            edge_bridge \
+            "$EDGE_BRIDGE_VERSION_REF" \
+            "$EDGE_BRIDGE_REVISION_REF"
 
-      - name: Build and publish OCI image
-        if: steps.existing.outputs.publish == 'true'
-        id: publish
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - name: Build and publish visualizer OCI image
+        if: steps.existing.outputs.visualizer_publish == 'true'
+        id: publish_visualizer
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.release.outputs.version_ref }}
-            ${{ steps.release.outputs.revision_ref }}
+            ${{ steps.release.outputs.visualizer_version_ref }}
+            ${{ steps.release.outputs.visualizer_revision_ref }}
           build-args: |
             BUILD_REVISION=${{ github.sha }}
             BUILD_VERSION=${{ steps.release.outputs.version }}
@@ -122,114 +198,326 @@ jobs:
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=release-visualizer-amd64
+          cache-to: type=gha,mode=max,scope=release-visualizer-amd64
 
-      - name: Resolve and verify OCI image
-        id: image
+      - name: Build and publish edge bridge OCI image
+        if: steps.existing.outputs.edge_bridge_publish == 'true'
+        id: publish_edge_bridge
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.edge-bridge
+          platforms: linux/arm64
+          target: runtime
+          push: true
+          tags: |
+            ${{ steps.release.outputs.edge_bridge_version_ref }}
+            ${{ steps.release.outputs.edge_bridge_revision_ref }}
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_VERSION=${{ steps.release.outputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=release-edge-bridge-arm64
+          cache-to: type=gha,mode=max,scope=release-edge-bridge-arm64
+
+      - name: Resolve and verify OCI images
+        id: images
         env:
-          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
-          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
-          PUBLISHED_DIGEST: ${{ steps.publish.outputs.digest }}
-          REVISION_REF: ${{ steps.release.outputs.revision_ref }}
+          EDGE_BRIDGE_EXISTING_DIGEST: ${{ steps.existing.outputs.edge_bridge_digest }}
+          EDGE_BRIDGE_IMAGE_NAME: ${{ steps.release.outputs.edge_bridge_image_name }}
+          EDGE_BRIDGE_MISSING_REF: ${{ steps.existing.outputs.edge_bridge_missing_ref }}
+          EDGE_BRIDGE_PUBLISHED_DIGEST: ${{ steps.publish_edge_bridge.outputs.digest }}
+          EDGE_BRIDGE_REVISION_REF: ${{ steps.release.outputs.edge_bridge_revision_ref }}
+          EDGE_BRIDGE_VERSION_REF: ${{ steps.release.outputs.edge_bridge_version_ref }}
           VERSION: ${{ steps.release.outputs.version }}
-          VERSION_REF: ${{ steps.release.outputs.version_ref }}
+          VISUALIZER_EXISTING_DIGEST: ${{ steps.existing.outputs.visualizer_digest }}
+          VISUALIZER_IMAGE_NAME: ${{ steps.release.outputs.visualizer_image_name }}
+          VISUALIZER_MISSING_REF: ${{ steps.existing.outputs.visualizer_missing_ref }}
+          VISUALIZER_PUBLISHED_DIGEST: ${{ steps.publish_visualizer.outputs.digest }}
+          VISUALIZER_REVISION_REF: ${{ steps.release.outputs.visualizer_revision_ref }}
+          VISUALIZER_VERSION_REF: ${{ steps.release.outputs.visualizer_version_ref }}
         shell: bash
         run: |
-          digest="${PUBLISHED_DIGEST:-$EXISTING_DIGEST}"
-          version_digest="$(
-            docker buildx imagetools inspect "$VERSION_REF" \
-              --format '{{.Manifest.Digest}}'
-          )"
-          revision_digest="$(
-            docker buildx imagetools inspect "$REVISION_REF" \
-              --format '{{.Manifest.Digest}}'
-          )"
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || \
-                "$digest" != "$version_digest" || \
-                "$digest" != "$revision_digest" ]]; then
-            echo "release image tags do not resolve to one valid digest" >&2
-            exit 1
-          fi
-          manifest_path="$RUNNER_TEMP/release-manifest.json"
-          docker buildx imagetools inspect --raw "$IMAGE_NAME@$digest" \
-            > "$manifest_path"
-          python - "$manifest_path" <<'PY'
+          verify_image() {
+            local output_prefix="$1"
+            local image_name="$2"
+            local version_ref="$3"
+            local revision_ref="$4"
+            local published_digest="$5"
+            local existing_digest="$6"
+            local expected_architecture="$7"
+            local missing_ref="$8"
+            local digest
+            local version_digest
+            local revision_digest
+            local metadata_prefix
+            digest="${published_digest:-$existing_digest}"
+            if [[ "$missing_ref" == "$version_ref" ]]; then
+              version_digest=""
+            else
+              version_digest="$(
+                docker buildx imagetools inspect "$version_ref" \
+                  --format '{{.Manifest.Digest}}'
+              )"
+            fi
+            if [[ "$missing_ref" == "$revision_ref" ]]; then
+              revision_digest=""
+            else
+              revision_digest="$(
+                docker buildx imagetools inspect "$revision_ref" \
+                  --format '{{.Manifest.Digest}}'
+              )"
+            fi
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || \
+                  ( -z "$version_digest" && -z "$revision_digest" ) ]]; then
+              echo "$output_prefix available tags do not resolve to one valid digest" >&2
+              exit 1
+            fi
+            if [[ -n "$version_digest" && "$digest" != "$version_digest" ]]; then
+              echo "$output_prefix version tag has an unexpected digest" >&2
+              exit 1
+            fi
+            if [[ -n "$revision_digest" && "$digest" != "$revision_digest" ]]; then
+              echo "$output_prefix revision tag has an unexpected digest" >&2
+              exit 1
+            fi
+
+            metadata_prefix="$RUNNER_TEMP/$output_prefix"
+            docker buildx imagetools inspect --raw "$image_name@$digest" \
+              > "$metadata_prefix-manifest.json"
+            mapfile -t manifest_digests < <(
+              python - \
+                "$metadata_prefix-manifest.json" \
+                "$expected_architecture" <<'PY'
           import json
+          import re
           import sys
+
 
           with open(sys.argv[1], encoding="utf-8") as source:
               manifest = json.load(source)
-          runnable_platforms = {
+          if manifest.get("mediaType") != "application/vnd.oci.image.index.v1+json":
+              raise SystemExit("release image must be an OCI image index")
+
+          entries = manifest.get("manifests", ())
+          runnable = [
+              entry
+              for entry in entries
+              if entry.get("platform", {}).get("os") != "unknown"
+          ]
+          platforms = [
               (
                   entry.get("platform", {}).get("os"),
                   entry.get("platform", {}).get("architecture"),
               )
-              for entry in manifest.get("manifests", ())
-              if entry.get("platform", {}).get("os") != "unknown"
-          }
-          expected = {("linux", "amd64")}
-          if runnable_platforms != expected:
+              for entry in runnable
+          ]
+          expected = [("linux", sys.argv[2])]
+          if platforms != expected:
               raise SystemExit(
-                  f"release manifest platforms must be {sorted(expected)}: "
-                  f"observed {sorted(runnable_platforms)}"
+                  f"release manifest must contain one {expected[0]} runnable image: "
+                  f"observed {platforms}"
+              )
+
+          runnable_digest = runnable[0].get("digest")
+          if not isinstance(runnable_digest, str) or re.fullmatch(
+              r"sha256:[0-9a-f]{64}", runnable_digest
+          ) is None:
+              raise SystemExit("release runnable image has an invalid digest")
+          attestations = [
+              entry
+              for entry in entries
+              if entry.get("platform") == {"architecture": "unknown", "os": "unknown"}
+              and entry.get("annotations", {}).get("vnd.docker.reference.type")
+              == "attestation-manifest"
+              and entry.get("annotations", {}).get("vnd.docker.reference.digest")
+              == runnable_digest
+          ]
+          if len(attestations) != 1 or len(entries) != 2:
+              raise SystemExit(
+                  "release index must contain one runnable image and its attestation manifest"
+              )
+          attestation_digest = attestations[0].get("digest")
+          if not isinstance(attestation_digest, str) or re.fullmatch(
+              r"sha256:[0-9a-f]{64}", attestation_digest
+          ) is None:
+              raise SystemExit("release attestation has an invalid digest")
+          print(runnable_digest)
+          print(attestation_digest)
+          PY
+            )
+            if [[ "${#manifest_digests[@]}" -ne 2 ]]; then
+              echo "$output_prefix manifest validation did not return both digests" >&2
+              exit 1
+            fi
+
+            runnable_digest="${manifest_digests[0]}"
+            attestation_digest="${manifest_digests[1]}"
+            docker buildx imagetools inspect --raw \
+              "$image_name@$attestation_digest" \
+              > "$metadata_prefix-attestation.json"
+            python - \
+              "$metadata_prefix-attestation.json" \
+              "$runnable_digest" <<'PY'
+          import json
+          import sys
+
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              manifest = json.load(source)
+          if (
+              manifest.get("artifactType")
+              != "application/vnd.docker.attestation.manifest.v1+json"
+          ):
+              raise SystemExit("release attestation has an unexpected artifact type")
+          if manifest.get("subject", {}).get("digest") != sys.argv[2]:
+              raise SystemExit("release attestation subject differs from the runnable image")
+
+          layers = manifest.get("layers", ())
+          if any(
+              layer.get("mediaType") != "application/vnd.in-toto+json"
+              for layer in layers
+          ):
+              raise SystemExit("release attestation layers must use the in-toto media type")
+          predicates = {
+              layer.get("annotations", {}).get("in-toto.io/predicate-type")
+              for layer in layers
+          }
+          if None in predicates:
+              raise SystemExit("release attestation layer is missing its predicate type")
+          required = {
+              "https://spdx.dev/Document",
+              "https://slsa.dev/provenance/v1",
+          }
+          if not required.issubset(predicates):
+              raise SystemExit(
+                  f"release attestation predicates are incomplete: {sorted(predicates)}"
               )
           PY
-          docker pull "$IMAGE_NAME@$digest"
-          image_version="$(
-            docker image inspect "$IMAGE_NAME@$digest" \
-              --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
-          )"
-          image_revision="$(
-            docker image inspect "$IMAGE_NAME@$digest" \
-              --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
-          )"
-          if [[ "$image_version" != "$VERSION" || \
-                "$image_revision" != "$GITHUB_SHA" ]]; then
-            echo "release image labels do not match the release target" >&2
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Validate published OCI image
+            docker pull --platform "linux/$expected_architecture" "$image_name@$digest"
+            image_version="$(
+              docker image inspect "$image_name@$digest" \
+                --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+            )"
+            image_revision="$(
+              docker image inspect "$image_name@$digest" \
+                --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+            )"
+            image_platform="$(
+              docker image inspect "$image_name@$digest" \
+                --format '{{.Os}}/{{.Architecture}}'
+            )"
+            if [[ "$image_version" != "$VERSION" || \
+                  "$image_revision" != "$GITHUB_SHA" || \
+                  "$image_platform" != "linux/$expected_architecture" ]]; then
+              echo "$output_prefix image configuration does not match the release target" >&2
+              exit 1
+            fi
+            if [[ -n "$missing_ref" ]]; then
+              docker buildx imagetools create \
+                --tag "$missing_ref" \
+                "$image_name@$digest"
+            fi
+            version_digest="$(
+              docker buildx imagetools inspect "$version_ref" \
+                --format '{{.Manifest.Digest}}'
+            )"
+            revision_digest="$(
+              docker buildx imagetools inspect "$revision_ref" \
+                --format '{{.Manifest.Digest}}'
+            )"
+            if [[ "$digest" != "$version_digest" ]]; then
+              echo "$output_prefix version tag recovery changed the digest" >&2
+              exit 1
+            fi
+            if [[ "$digest" != "$revision_digest" ]]; then
+              echo "$output_prefix image tag recovery did not preserve the digest" >&2
+              exit 1
+            fi
+            echo "${output_prefix}_digest=$digest" >> "$GITHUB_OUTPUT"
+          }
+          verify_image \
+            visualizer \
+            "$VISUALIZER_IMAGE_NAME" \
+            "$VISUALIZER_VERSION_REF" \
+            "$VISUALIZER_REVISION_REF" \
+            "$VISUALIZER_PUBLISHED_DIGEST" \
+            "$VISUALIZER_EXISTING_DIGEST" \
+            amd64 \
+            "$VISUALIZER_MISSING_REF"
+          verify_image \
+            edge_bridge \
+            "$EDGE_BRIDGE_IMAGE_NAME" \
+            "$EDGE_BRIDGE_VERSION_REF" \
+            "$EDGE_BRIDGE_REVISION_REF" \
+            "$EDGE_BRIDGE_PUBLISHED_DIGEST" \
+            "$EDGE_BRIDGE_EXISTING_DIGEST" \
+            arm64 \
+            "$EDGE_BRIDGE_MISSING_REF"
+
+      - name: Validate published visualizer image
         env:
-          IMAGE_UNDER_TEST: ${{ steps.release.outputs.image_name }}@${{ steps.image.outputs.digest }}
+          IMAGE_UNDER_TEST: ${{ steps.release.outputs.visualizer_image_name }}@${{ steps.images.outputs.visualizer_digest }}
           SKIP_IMAGE_BUILD: "true"
         run: scripts/check-headless-container.sh
 
       - name: Verify public package visibility
         env:
+          EDGE_BRIDGE_IMAGE_NAME: ${{ steps.release.outputs.edge_bridge_image_name }}
           GH_TOKEN: ${{ github.token }}
-          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          VISUALIZER_IMAGE_NAME: ${{ steps.release.outputs.visualizer_image_name }}
         shell: bash
         run: |
-          package_name="${IMAGE_NAME##*/}"
-          visibility=""
-          for _ in 1 2 3 4 5; do
-            visibility="$(
-              gh api "/orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package_name" \
-                --jq .visibility 2>/dev/null || true
-            )"
-            if [[ "$visibility" == "public" ]]; then
-              break
-            fi
-            sleep 5
-          done
-          if [[ "$visibility" != "public" ]]; then
-            echo "GHCR package visibility is not public: ${visibility:-unavailable}" >&2
-            exit 1
-          fi
+          verify_visibility() {
+            local image_name="$1"
+            local package_name
+            local visibility=""
+            package_name="${image_name##*/}"
+            for _ in 1 2 3 4 5; do
+              visibility="$(
+                gh api "/orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package_name" \
+                  --jq .visibility 2>/dev/null || true
+              )"
+              if [[ "$visibility" == "public" ]]; then
+                return 0
+              fi
+              sleep 5
+            done
+            echo "GHCR package visibility is not public for $package_name: ${visibility:-unavailable}" >&2
+            return 1
+          }
+          verify_visibility "$VISUALIZER_IMAGE_NAME"
+          verify_visibility "$EDGE_BRIDGE_IMAGE_NAME"
 
       - name: Assemble release assets
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
-          REVISION_REF: ${{ steps.release.outputs.revision_ref }}
+          EDGE_BRIDGE_IMAGE_DIGEST: ${{ steps.images.outputs.edge_bridge_digest }}
+          EDGE_BRIDGE_IMAGE_NAME: ${{ steps.release.outputs.edge_bridge_image_name }}
+          EDGE_BRIDGE_REVISION_REF: ${{ steps.release.outputs.edge_bridge_revision_ref }}
+          EDGE_BRIDGE_VERSION_REF: ${{ steps.release.outputs.edge_bridge_version_ref }}
           VERSION: ${{ steps.release.outputs.version }}
-          VERSION_REF: ${{ steps.release.outputs.version_ref }}
+          VISUALIZER_IMAGE_DIGEST: ${{ steps.images.outputs.visualizer_digest }}
+          VISUALIZER_IMAGE_NAME: ${{ steps.release.outputs.visualizer_image_name }}
+          VISUALIZER_REVISION_REF: ${{ steps.release.outputs.visualizer_revision_ref }}
+          VISUALIZER_VERSION_REF: ${{ steps.release.outputs.visualizer_version_ref }}
         shell: bash
         run: |
           mkdir release
           cp dist/*.whl dist/*.tar.gz release/
           cp THIRD_PARTY_NOTICES.md release/
+          git archive \
+            --format=tar \
+            --prefix=scrap-monitoring-visualizer-deployment/ \
+            "$GITHUB_SHA" \
+            .env.example \
+            deploy \
+            | gzip -n > release/deployment.tar.gz
           docker run --rm \
             --platform linux/amd64 \
             --network none \
@@ -237,25 +525,51 @@ jobs:
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --entrypoint python \
-            "$IMAGE_NAME@$IMAGE_DIGEST" \
+            "$VISUALIZER_IMAGE_NAME@$VISUALIZER_IMAGE_DIGEST" \
             -m scrap_monitoring_visualizer.dependency_audit \
             > release/dependency-inventory.json
-          printf '%s@%s\n' "$IMAGE_NAME" "$IMAGE_DIGEST" \
+          printf '%s@%s\n' "$VISUALIZER_IMAGE_NAME" "$VISUALIZER_IMAGE_DIGEST" \
             > release/oci-image.txt
+          printf '%s@%s\n' "$EDGE_BRIDGE_IMAGE_NAME" "$EDGE_BRIDGE_IMAGE_DIGEST" \
+            > release/edge-bridge-oci-image.txt
           jq -n \
-            --arg digest "$IMAGE_DIGEST" \
-            --arg image "$IMAGE_NAME" \
-            --arg revision_ref "$REVISION_REF" \
+            --arg edge_bridge_digest "$EDGE_BRIDGE_IMAGE_DIGEST" \
+            --arg edge_bridge_image "$EDGE_BRIDGE_IMAGE_NAME" \
+            --arg edge_bridge_revision_ref "$EDGE_BRIDGE_REVISION_REF" \
+            --arg edge_bridge_version_ref "$EDGE_BRIDGE_VERSION_REF" \
             --arg source_commit "$GITHUB_SHA" \
             --arg version "$VERSION" \
-            --arg version_ref "$VERSION_REF" \
-            '{digest: $digest, image: $image, platform: "linux/amd64", revision_ref: $revision_ref, source_commit: $source_commit, version: $version, version_ref: $version_ref}' \
-            > release/release-metadata.json
+            --arg visualizer_digest "$VISUALIZER_IMAGE_DIGEST" \
+            --arg visualizer_image "$VISUALIZER_IMAGE_NAME" \
+            --arg visualizer_revision_ref "$VISUALIZER_REVISION_REF" \
+            --arg visualizer_version_ref "$VISUALIZER_VERSION_REF" \
+            '{
+              source_commit: $source_commit,
+              version: $version,
+              images: {
+                visualizer: {
+                  digest: $visualizer_digest,
+                  image: $visualizer_image,
+                  platform: "linux/amd64",
+                  revision_ref: $visualizer_revision_ref,
+                  version_ref: $visualizer_version_ref
+                },
+                edge_bridge: {
+                  digest: $edge_bridge_digest,
+                  image: $edge_bridge_image,
+                  platform: "linux/arm64",
+                  revision_ref: $edge_bridge_revision_ref,
+                  version_ref: $edge_bridge_version_ref
+                }
+              }
+            }' > release/release-metadata.json
           (
             cd release
             sha256sum \
               THIRD_PARTY_NOTICES.md \
+              deployment.tar.gz \
               dependency-inventory.json \
+              edge-bridge-oci-image.txt \
               oci-image.txt \
               release-metadata.json \
               scrap_monitoring_visualizer-*.tar.gz \
@@ -265,9 +579,14 @@ jobs:
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
           Scrap Monitoring Visualizer $VERSION
 
-          Container image: $IMAGE_NAME
-          Manifest digest: $IMAGE_DIGEST
-          Deployment reference: $IMAGE_NAME@$IMAGE_DIGEST
+          Visualizer image: $VISUALIZER_IMAGE_NAME
+          Visualizer manifest digest: $VISUALIZER_IMAGE_DIGEST
+          Visualizer deployment reference: $VISUALIZER_IMAGE_NAME@$VISUALIZER_IMAGE_DIGEST
+
+          Edge bridge image: $EDGE_BRIDGE_IMAGE_NAME
+          Edge bridge manifest digest: $EDGE_BRIDGE_IMAGE_DIGEST
+          Edge bridge deployment reference: $EDGE_BRIDGE_IMAGE_NAME@$EDGE_BRIDGE_IMAGE_DIGEST
+
           Source commit: $GITHUB_SHA
           EOF
 
