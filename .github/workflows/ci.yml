@@ -17,7 +17,7 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -41,6 +41,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups
 
+      - name: Install headless rendering runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libegl1 libgl1
+
+      - name: Validate edge bridge dependency notices
+        run: |
+          cargo install --locked --version 0.9.2 --features cli cargo-about
+          cargo install --locked --version 0.22.2 cargo-audit
+          python3 tools/generate_edge_bridge_notices.py --check
+          cargo audit --file edge-bridge/Cargo.lock
+
       - name: Validate Markdown
         run: uv run --frozen rumdl check --no-config --no-cache --disable MD013 .
 
@@ -57,10 +69,51 @@ jobs:
         run: uv run --frozen mypy
 
       - name: Run tests
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYVISTA_OFF_SCREEN: "true"
+          VTK_DEFAULT_OPENGL_WINDOW: vtkEGLRenderWindow
         run: uv run --frozen pytest
 
       - name: Compile validation tools
         run: uv run --frozen python -m compileall -q src tests tools
+
+      - name: Validate deployment files
+        run: scripts/check-deployment.sh
+
+      - name: Validate edge bridge source and release binary
+        run: |
+          docker build \
+            --file Dockerfile.edge-bridge \
+            --target test \
+            --tag scrap-monitoring-visualizer-edge-bridge:test \
+            .
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          version: v0.37.1
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3
+
+      - name: Build ARM64 edge bridge image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.edge-bridge
+          platforms: linux/arm64
+          target: runtime
+          push: false
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=edge-bridge-arm64
+          cache-to: type=gha,mode=max,scope=edge-bridge-arm64
 
       - name: Validate headless container
         run: scripts/check-headless-container.sh

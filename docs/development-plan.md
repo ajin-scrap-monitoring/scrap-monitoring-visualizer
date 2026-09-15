@@ -3,133 +3,166 @@
 ## 문서 역할
 
 이 문서는 현재 구현 상태, 작업 순서와 단계별 완료 조건의 정본이다. 초기 제품 범위는
-[프로젝트 명세](project-spec.md), 구현 설계는 [아키텍처](architecture.md), 협업 절차와
-저장소 설정의 작업 경계는 [프로젝트 지침](../.agents/AGENTS.md)을 따른다.
+[프로젝트 명세](project-spec.md), 구현 설계는 [아키텍처](architecture.md), 합성 camera
+외부 계약은 [합성 카메라 Live 계약](../SYNTHETIC_CAMERA_VIDEO.md)을 따른다.
 
 ## 현재 상태
 
-P0부터 P7까지 총 8개 단계의 구현과 검증이 완료됐다. 현재 제품은 Observation version 1을
-수신해 고정 사선 3D 프레임 하나를 Browser에 실시간 제공한다. 관찰 기록, Replay와 MP4
-출력은 제공하지 않는다.
+전체 구현은 P0부터 P8까지 9개 단계다. 각 단계의 산출물은 source와 배포 파일에 반영되어
+있으며 P8은 릴리스와 실제 장비 검증 조건을 추가로 정의한다.
 
-`docs/project-spec.md`는 고정 입력이므로 수정하지 않는다. 해당 문서의 기록, Replay, MP4와
-상면 camera 요구사항은 현재 제품 결정과 일치하지 않으며 완료 조건으로 사용하지 않는다.
-이 범위를 다시 요구하려면 고정 입력의 새 version을 별도로 제공해야 한다.
+현재 source는 Observation version 1을 받아 다음 2개 live 출력을 만든다.
 
-고정 계약의 원본과 해시는 [provenance.json](../contracts/observation/v1/provenance.json)에
-있다. Schema가 표현하지 않는 조건과 추가 수신 및 preview 요구사항도 검증 대상이다.
+| 출력 | 현재 구현 |
+| --- | --- |
+| Browser preview | 고정 사선 직교투영 3D frame 1개와 상태 |
+| Synthetic camera | Browser live page, 1920 x 1080 30 FPS MJPEG와 ARM64 V4L2 bridge |
+
+관찰 기록, replay, MP4, 상면 Browser 화면, depth map과 class mask는 제공하지 않는다.
+`docs/project-spec.md`는 고정 입력이므로 수정하지 않는다. 현재 제품 결정과 다른 고정 명세
+항목은 이 계획에서 완료 조건으로 사용하지 않는다.
+
+Release target은 `v1.1.0`이며 CI(Continuous Integration), CodeQL, 두 image의 릴리스 정책
+검사와 실제 90 frame 검증을 완료 조건으로 사용한다.
 
 ## 단계와 선행 관계
 
-| 단계 | 작업 단위 | 선행 단계 | 현재 상태 |
+| 단계 | 작업 단위 | 선행 단계 | 구현 상태 |
 | --- | --- | --- | --- |
-| P0 | 에이전트 지침, 계약 기준과 구현 계획 | 없음 | 완료 |
-| P1 | 실행 환경과 headless 렌더링 | P0 | 완료 |
-| P2 | 계약 parser와 실행 상태 판정 | P1 | 완료 |
-| P3 | TCP(Transmission Control Protocol) 수신 | P2 | 완료 |
-| P4 | 결정론적인 mesh와 장면 렌더링 | P1, P2 | 완료 |
-| P5 | Live CLI(Command-Line Interface)와 HTTP(Hypertext Transfer Protocol) preview | P3, P4 | 완료 |
-| P6 | Container, CI(Continuous Integration)와 릴리스 | P5 | 완료 |
-| P7 | 환경 변수와 사용자 배포 절차 | P6 | 완료 |
+| P0 | 에이전트 지침, 계약 기준과 구현 계획 | 없음 | 구현 |
+| P1 | 실행 환경과 headless 렌더링 | P0 | 구현 |
+| P2 | 계약 parser와 실행 상태 판정 | P1 | 구현 |
+| P3 | TCP(Transmission Control Protocol) 수신 | P2 | 구현 |
+| P4 | 결정론적인 mesh와 Browser 장면 | P1, P2 | 구현 |
+| P5 | Live CLI(Command-Line Interface)와 HTTP(Hypertext Transfer Protocol) preview | P3, P4 | 구현 |
+| P6 | AMD64 Container, CI와 릴리스 | P5 | 구현 |
+| P7 | 환경 변수와 사용자 배포 절차 | P6 | 구현 |
+| P8 | 합성 camera, ARM64 edge bridge와 두 image 릴리스 | P3, P4, P6, P7 | 구현 |
 
-각 변경은 시작 시 조직 양식의 이슈로 정의한다. 단계가 여러 PR(Pull Request)을 필요로 하면
-독립적으로 검증 가능한 산출물 단위로 나눈다.
+각 변경은 조직 공통 양식의 이슈, 이슈 번호가 포함된 branch, Conventional Commit, PR(Pull
+Request), CI와 CodeQL, squash merge 순서로 진행한다. Release tag는 원격 `main`의 검증된
+version commit에만 생성한다.
 
 ## P0. 프로젝트 기준
 
 | 구분 | 내용 |
 | --- | --- |
-| 산출물 | 에이전트 정본과 진입점, 문서, 계약 사본과 출처, 저장소 및 릴리스 규칙 검사 |
-| 완료 조건 | 심링크 검사, 명세 원본 보존, 계약 byte 일치, schema와 문서 검사 |
+| 산출물 | 에이전트 정본과 진입점, 계약 사본과 출처, 저장소 및 릴리스 검사 |
+| 완료 조건 | 심링크, 명세 원본, 계약 byte, schema와 문서 검사 통과 |
 
 ## P1. 실행 환경과 headless 렌더링
 
 | 구분 | 내용 |
 | --- | --- |
-| 산출물 | Python package, 고정 lockfile과 Mesa 기반 off-screen 렌더링 |
-| 환경 검증 | Linux AMD64 비root Container의 1280 x 720 합성 프레임 생성 |
-| 자원 측정 | 기본 및 최대 격자 rendering 시간과 최대 memory |
-| 완료 조건 | GPU와 `DISPLAY` 없는 실제 PNG 생성 및 유한한 자원 사용 |
+| 산출물 | Python package, 고정 lockfile과 OSMesa off-screen 렌더링 |
+| 완료 조건 | Linux AMD64 비root Container에서 GPU와 `DISPLAY` 없이 실제 PNG 생성 |
 
 개발 검사 도구는 Ruff, mypy, pytest와 rumdl의 4개다. CI는 저장소 검사, 정적 검사, 전체
-테스트와 실제 Container 검사를 `CI` job으로 집계한다. CodeQL은 Repository Default setup을
-사용한다.
+테스트와 실제 Container 검사를 `CI` job으로 집계한다.
 
 ## P2. 계약 parser와 실행 상태 판정
 
 | 구분 | 내용 |
 | --- | --- |
-| 산출물 | 불변 레코드 model, schema validator, 의미 검사와 실행 상태 전이 |
-| 검증 사례 | 타입 및 field 오류, 중복 key, 비유한 수치, 좌표와 배열 shape, sensor와 투입구 제약 |
-| 실행 검증 | Sequence 누락, 중복 및 역순, simulation 시각 감소, 같은 run 재접속과 정적 정보 불일치 |
-| 완료 조건 | 설치 package와 고정 계약 사본을 사용하는 계약 및 상태 전이 검사 통과 |
+| 산출물 | 불변 record model, schema validator, 의미 검사와 실행 상태 전이 |
+| 검증 | Field 오류, 중복 key, 비유한 수치, 배열 shape, sensor, 투입구, sequence와 run 전환 |
+| 완료 조건 | 설치 package와 고정 계약 사본을 사용하는 계약 및 상태 검사 통과 |
 
 ## P3. TCP 수신
 
 | 구분 | 내용 |
 | --- | --- |
 | 산출물 | 단일 producer 수신기, LF(Line Feed) 조립기와 재접속 처리 |
-| 전송 검증 | Packet 분할 및 병합, framing 오류 전 완료 prefix, LF 포함 한도, 추가 연결 거부, 응답 byte 부재 |
-| 상태 검증 | 최신 전체 Observation 교체, 무효 레코드 거부와 수신 통계 |
-| 완료 조건 | 느린 renderer 상황에서도 제한된 메모리와 수신 진행 유지 |
+| 검증 | Packet 분할 및 병합, line 상한, 추가 연결 거부, TCP 응답 byte 부재 |
+| 완료 조건 | 느린 renderer 상황에도 bounded memory와 수신 진행 유지 |
 
-## P4. Mesh와 장면 렌더링
+## P4. Mesh와 Browser 장면
 
 | 구분 | 내용 |
 | --- | --- |
-| 산출물 | 표면, 닫힌 적재 체적, 바닥, 외벽, 투입구, 카메라와 overlay |
-| 수치 검증 | 비대칭 Y-major 격자, 비영점 바닥 높이, concave 경계, 경계를 교차하는 cell, 퇴화 입력 |
-| 장면 검증 | 직교 투영, 1280 x 720 기본값, smooth shading, 우측 외벽 높이 눈금과 격자 |
-| 완료 조건 | 구조 및 수치 검사와 실제 사선 프레임 생성 통과 |
+| 산출물 | 표면, 적재 체적, 바닥, 외벽, 투입구, 직교투영 camera와 overlay |
+| 검증 | Y-major 격자, 비영점 바닥, concave 경계, clipping과 퇴화 입력 |
+| 완료 조건 | 구조 및 수치 검사와 실제 1280 x 720 사선 PNG 생성 |
 
-사선 화면은 우측 외벽 변에 바닥과 상단을 포함한 2 m 간격 높이 눈금을 표시한다. 눈금 숫자는
-프레임 높이에 맞춰 16부터 28까지 조정한다. 프레임 overlay는 실행 식별자와 누락 수를
-제외하고 연결과 관찰 상태를 표시한다.
+Browser 화면은 적재 공간과 scrap을 단일 3D frame으로 표시한다. 화면상 오른쪽 외벽 변에는
+바닥, 상단과 2 m 간격 높이 눈금을 표시하고 sensor와 색상 범례는 표시하지 않는다.
 
 ## P5. Live CLI와 HTTP preview
 
 | 구분 | 내용 |
 | --- | --- |
-| 산출물 | Live CLI, 최신 프레임 저장소, preview 경로와 Browser 화면 |
-| 상태 검증 | 프레임 준비 전 상태, revision, 수신 및 렌더링 sequence, 누락과 마지막 정상 시각 |
-| 격리 검증 | 연결되지 않은 Browser, 느린 Browser, 요청 상한, 최신 pending 1개와 수신 진행 |
-| 연결 검증 | 추가 관찰 없는 disconnect overlay 갱신, 재접속, 새 실행에서 이전 표면 제거 |
-| 완료 조건 | 실제 TCP 및 HTTP 경계의 통합 검사와 Live 인자 오류 검사 통과 |
+| 산출물 | Live CLI, 최신 PNG 저장소, 상태 endpoint와 Browser 화면 |
+| 검증 | 준비 전 상태, revision, sequence, 연결 중단, 새 run과 느린 Browser 격리 |
+| 완료 조건 | 실제 TCP 및 HTTP 통합 검사와 Live 설정 오류 검사 통과 |
 
-## P6. Container, CI와 릴리스
+## P6. AMD64 Container, CI와 릴리스
 
 | 구분 | 내용 |
 | --- | --- |
 | 산출물 | Linux AMD64 image, CI, Release workflow와 의존성 고지 |
-| 실행 검증 | 비root, read-only root filesystem, TCP와 HTTP port, 환경 변수와 CLI 우선순위 |
-| 품질 검증 | 단위, 계약, 통합 및 Container 검사의 CI 집계와 CodeQL 결과 |
-| 배포 검증 | Version tag, source tag, digest, OCI label, SBOM과 build provenance |
-| 완료 조건 | 고정 digest image의 Live 수신, Browser preview와 공개 Package 확인 |
+| 검증 | 비root, read-only root, TCP 및 HTTP port, version, digest, OCI label과 attestation |
+| 완료 조건 | 고정 digest image의 수신, Browser preview와 공개 Package 확인 |
 
 ## P7. 환경 변수와 사용자 배포 절차
 
 | 구분 | 내용 |
 | --- | --- |
-| 산출물 | 6개 Live 환경 변수, `.env.example`, 자기완결적 README와 배포 문서 |
-| 설정 검증 | 필수값, 숫자 변환, CLI override와 endpoint 충돌 |
-| Container 검증 | 환경 변수 기반 Live 설정과 실제 TCP 및 HTTP 통합 |
-| 문서 검증 | 불변 image 선택, 환경 변수 주입, Generator 연결과 상태 확인 |
-| 완료 조건 | README의 실행 명령과 전체 자동 검사 통과 |
+| 산출물 | Visualizer 환경 변수, `.env.example`, README와 배포 문서 |
+| 검증 | 필수값, 숫자 변환, CLI override, endpoint 충돌과 환경 변수 기반 통합 |
+| 완료 조건 | README 실행 절차와 전체 자동 검사 통과 |
+
+## P8. 합성 camera와 edge bridge
+
+P8 구현 산출물은 다음 8개다.
+
+| 산출물 | 현재 상태 |
+| --- | --- |
+| Version 1 camera profile과 내장 현장 시점 | 구현 |
+| 연속 Observation의 30 Hz frame 선택과 bounded 보간 | 구현 |
+| 원근 PBR 장면, seeded 효과와 JPEG encoding | 구현 |
+| 최신 JPEG WebSocket, Browser page와 camera 상태 endpoint | 구현 |
+| Rust descriptor 및 JPEG validator와 재연결 | 구현 |
+| `/dev/video42` V4L2 writer와 semantic alias 설정 | 구현 |
+| Linux ARM64 edge image와 Compose 배포 파일 | 구현 |
+| 두 OCI image Release workflow와 asset | 구현 |
+
+P8의 로컬 검증 순서는 다음 5단계다.
+
+1. Python format, lint, type, 단위 및 통합 test 실행
+2. Rust format, Clippy, test와 release binary build 실행
+3. AMD64 headless server image에서 PNG와 합성 JPEG 생성
+4. QEMU 기반 Linux ARM64 edge image build
+5. Markdown, Repository 경계와 release policy 검사
+
+P8 완료 조건은 다음 7개다.
+
+1. PR의 필수 `CI`와 CodeQL 검사 통과
+2. 원격 `main` squash merge와 이슈 및 Project 상태 완료
+3. Release 전 version, tag ancestry, 두 image platform, SBOM과 provenance logic 재검토
+4. `v1.1.0` tag 1개를 통한 GitHub Release와 Public GHCR image 2개 게시
+5. Release asset digest를 사용하는 AMD64 server와 ARM64 edge device 배포
+6. Edge V4L2 camera의 MJPEG 1920 x 1080 frame 90개를 2.5 s부터 5 s 안에 수신하고 decode
+7. 연결 중단과 재연결, camera 상태, server 및 edge 자원 사용 확인
 
 ## 요구사항 검증 대응
 
-현재 제품 검증은 다음 8개 범주로 구성한다.
+현재 제품 검증은 다음 12개 범주로 구성한다.
 
 | 범주 | 담당 단계 | 검증 경계 |
 | --- | --- | --- |
-| 계약 fixture와 schema | P2 | `tests/contract/` |
+| Observation fixture와 schema | P2 | `tests/contract/` |
 | Framing과 최대 line | P3 | `tests/unit/`, `tests/integration/` |
 | Version, type과 field 오류 | P2 | `tests/contract/`, `tests/unit/` |
 | Sequence와 run 전환 | P2, P3 | `tests/unit/`, `tests/integration/` |
 | 표면 mesh와 clipping | P4 | `tests/unit/` |
-| Queue, frame과 해상도 상한 | P4, P5 | `tests/unit/`, `tests/integration/` |
-| Live CLI option과 오류 종료 | P5 | `tests/unit/` |
-| HTTP 최신 상태와 Browser 격리 | P5 | `tests/integration/` |
+| Browser queue, frame과 해상도 | P4, P5 | `tests/unit/`, `tests/integration/` |
+| Live 설정과 오류 종료 | P5, P7 | `tests/unit/` |
+| HTTP 상태와 Browser 격리 | P5 | `tests/integration/` |
+| Camera profile, 보간과 scheduler | P8 | `tests/unit/` |
+| 원근 JPEG와 WebSocket | P8 | `tests/unit/`, `tests/integration/` |
+| Rust descriptor, JPEG, backoff와 V4L2 | P8 | `edge-bridge/src/` unit test |
+| 두 platform image와 release policy | P8 | `tools/tests/`, CI와 실제 장비 |
 
-Container 검증은 `scripts/check-headless-container.sh`에서 실제 실행 경계를 확인한다. 단위
-테스트는 외부 network나 형제 프로젝트 설치 상태에 의존하지 않는다.
+Container 검증은 `scripts/check-headless-container.sh`에서 실제 OSMesa 실행 경계를 확인한다.
+단위 및 통합 test는 외부 network, 실제 host 정보나 형제 프로젝트 설치 상태에 의존하지
+않는다.

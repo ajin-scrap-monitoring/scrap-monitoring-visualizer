@@ -13,12 +13,13 @@ Antigravity는 `.agents/rules/project.md`의 Always On 규칙에서 이 파일�
 
 ## 문서 정본
 
-프로젝트 입력, 사용법, 설계와 검증의 정본은 다음 7개다.
+프로젝트 입력, 사용법, 설계와 검증의 정본은 다음 8개다.
 
 | 문서 | 책임 |
 | --- | --- |
 | [README](../README.md) | 제품 개요, 환경 변수와 사용자 실행 및 배포 절차 |
 | [프로젝트 명세](../docs/project-spec.md) | 제품 범위, 외부 계약과 최종 완료 조건 |
+| [합성 카메라 Live 계약](../SYNTHETIC_CAMERA_VIDEO.md) | 합성 frame, 보간, WebSocket과 V4L2 외부 계약 |
 | [아키텍처](../docs/architecture.md) | 채택한 설계, 모듈 경계와 내부 처리 정책 |
 | [개발 계획](../docs/development-plan.md) | 현재 구현 상태, 작업 순서와 단계별 검증 |
 | [계약 출처](../contracts/observation/v1/provenance.json) | 고정 계약 사본의 원본, commit과 파일 해시 |
@@ -57,7 +58,7 @@ GitHub 작업 전에 관련 원문의 최신 내용을 확인한다. 이슈는 �
 위한 schema 수정을 하지 않는다. 추가 검증 사례는 `tests/`에서 공개 합성 fixture를
 기반으로 구성한다. 계약 검사는 저장소에 고정한 사본을 사용한다.
 
-`~/scrap-monitoring-lidar-generator`는 계약과 publisher 동작을 확인하는 읽기 전용 참고
+`~/scrap-monitoring-lidar-simulator`는 계약과 publisher 동작을 확인하는 읽기 전용 참고
 프로젝트다. 생성기 구현을 실행 의존성으로 추가하지 않는다. 참고 범위는 공개 계약,
 `docs/visualizer-requirements.md`, `docs/observation.md`와 관련 공개 소스 및 테스트다.
 

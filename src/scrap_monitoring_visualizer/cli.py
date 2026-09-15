@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from scrap_monitoring_visualizer.limits import (
@@ -14,8 +15,18 @@ from scrap_monitoring_visualizer.limits import (
     DEFAULT_FRAME_WIDTH,
 )
 from scrap_monitoring_visualizer.live import LiveConfig, run_live
+from scrap_monitoring_visualizer.synthetic_camera import SyntheticCameraConfig
 
 ENV_PREFIX = "SCRAP_MONITORING_VISUALIZER_"
+
+
+def _boolean(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
 
 
 def _environment_argument(
@@ -70,6 +81,20 @@ def build_parser(
         type=int,
         **_environment_argument(values, "HEIGHT", DEFAULT_FRAME_HEIGHT),
     )
+    live.add_argument(
+        "--camera-enabled",
+        type=_boolean,
+        **_environment_argument(values, "CAMERA_ENABLED", "false"),
+    )
+    live.add_argument(
+        "--camera-profile",
+        **_environment_argument(values, "CAMERA_PROFILE"),
+    )
+    live.add_argument(
+        "--camera-backend",
+        choices=("auto", "osmesa", "egl"),
+        **_environment_argument(values, "CAMERA_BACKEND"),
+    )
     return parser
 
 
@@ -81,6 +106,14 @@ def main(
     parser = build_parser(environment)
     args = parser.parse_args(arguments)
     try:
+        camera_config = None
+        if args.camera_enabled:
+            camera_config = SyntheticCameraConfig.from_file(args.camera_profile or None)
+            if args.camera_backend is not None:
+                camera_config = replace(
+                    camera_config,
+                    backend=args.camera_backend,
+                )
         live_config = LiveConfig(
             tcp_host=args.tcp_host,
             tcp_port=args.tcp_port,
@@ -88,6 +121,7 @@ def main(
             http_port=args.http_port,
             width=args.width,
             height=args.height,
+            synthetic_camera=camera_config,
         )
         live_config.validate()
         return asyncio.run(run_live(live_config))

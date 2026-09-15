@@ -5,13 +5,16 @@ import socket
 from queue import Queue
 from typing import Any
 
+import pytest
 import uvicorn
 
+from scrap_monitoring_visualizer.live import LiveCoordinator
 from scrap_monitoring_visualizer.preview import (
     LatestFrameStore,
     RequestGate,
     create_preview_app,
 )
+from scrap_monitoring_visualizer.rendering import RenderConfig
 from scrap_monitoring_visualizer.rendering.worker import (
     LatestRenderWorker,
     RenderOutcome,
@@ -120,6 +123,27 @@ def test_renderer_sends_latest_pending_request_after_inflight_finishes() -> None
     assert worker._inflight is True
 
 
+def test_coordinator_fails_when_browser_renderer_exits() -> None:
+    frames = LatestFrameStore()
+    worker = LatestRenderWorker.__new__(LatestRenderWorker)
+    worker._frames = frames
+    worker._generation = 0
+    worker._inflight = False
+    worker._requests = Queue[Any]()
+    worker._outcomes = Queue[Any]()
+    worker._pending = None
+    worker.last_error = None
+    worker._process = type(
+        "DeadProcess",
+        (),
+        {"is_alive": staticmethod(lambda: False)},
+    )()
+    coordinator = LiveCoordinator(frames, worker, RenderConfig())
+
+    with pytest.raises(RuntimeError, match="browser renderer process exited"):
+        coordinator.poll_renderers()
+
+
 def test_preview_http_endpoints_return_latest_frame() -> None:
     async def exercise() -> None:
         frames = LatestFrameStore()
@@ -161,6 +185,7 @@ def test_preview_http_endpoints_return_latest_frame() -> None:
             status, _, body = await _request(port, "/")
             assert status == 200
             assert b"/frame.png?revision=" in body
+            assert b'href="/camera/"' in body
             assert body.count(b"<img ") == 1
             assert b"status.frame_revision!==displayedRevision" in body
         finally:

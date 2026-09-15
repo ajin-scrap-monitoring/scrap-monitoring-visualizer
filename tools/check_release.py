@@ -37,7 +37,9 @@ def project_version(root: Path) -> str:
             break
     if module_version is None:
         raise ValueError("Package __version__ is missing")
-    if pyproject_version != module_version:
+    with (root / "edge-bridge/Cargo.toml").open("rb") as source:
+        edge_bridge_version = tomllib.load(source)["package"]["version"]
+    if len({pyproject_version, module_version, edge_bridge_version}) != 1:
         raise ValueError("Package version declarations do not match")
     return str(pyproject_version)
 

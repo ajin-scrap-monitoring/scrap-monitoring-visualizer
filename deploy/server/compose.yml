@@ -1,0 +1,38 @@
+services:
+  visualizer:
+    image: ${SCRAP_MONITORING_VISUALIZER_IMAGE:?release image digest is required}
+    command:
+      - live
+    env_file:
+      - ${SCRAP_MONITORING_VISUALIZER_ENV_FILE:-/etc/scrap-monitoring-visualizer/server.env}
+    ports:
+      - ${SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS:?Tailnet publish address is required}:17000:17000
+      - ${SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS:?Tailnet publish address is required}:18000:18000
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    mem_limit: 3g
+    cpus: 2
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    restart: "no"
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:18000/status', timeout=2).read()
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s

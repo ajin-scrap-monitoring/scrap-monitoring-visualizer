@@ -19,6 +19,8 @@ def test_live_parser_reads_environment_configuration() -> None:
             "SCRAP_MONITORING_VISUALIZER_HTTP_PORT": "18000",
             "SCRAP_MONITORING_VISUALIZER_WIDTH": "1920",
             "SCRAP_MONITORING_VISUALIZER_HEIGHT": "1080",
+            "SCRAP_MONITORING_VISUALIZER_CAMERA_ENABLED": "true",
+            "SCRAP_MONITORING_VISUALIZER_CAMERA_BACKEND": "egl",
         }
     )
 
@@ -30,6 +32,8 @@ def test_live_parser_reads_environment_configuration() -> None:
     assert args.http_port == 18000
     assert args.width == 1920
     assert args.height == 1080
+    assert args.camera_enabled is True
+    assert args.camera_backend == "egl"
 
 
 def test_live_parser_uses_rendering_defaults() -> None:
@@ -46,6 +50,9 @@ def test_live_parser_uses_rendering_defaults() -> None:
 
     assert args.width == 1280
     assert args.height == 720
+    assert args.camera_enabled is False
+    assert args.camera_profile is None
+    assert args.camera_backend is None
 
 
 def test_cli_arguments_override_environment_configuration() -> None:
@@ -85,6 +92,23 @@ def test_parser_rejects_invalid_environment_number() -> None:
             "SCRAP_MONITORING_VISUALIZER_TCP_PORT": "invalid",
             "SCRAP_MONITORING_VISUALIZER_HTTP_HOST": "0.0.0.0",
             "SCRAP_MONITORING_VISUALIZER_HTTP_PORT": "18000",
+        }
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["live"])
+
+    assert caught.value.code == 2
+
+
+def test_parser_rejects_invalid_camera_boolean() -> None:
+    parser = build_parser(
+        {
+            "SCRAP_MONITORING_VISUALIZER_TCP_HOST": "0.0.0.0",
+            "SCRAP_MONITORING_VISUALIZER_TCP_PORT": "17000",
+            "SCRAP_MONITORING_VISUALIZER_HTTP_HOST": "0.0.0.0",
+            "SCRAP_MONITORING_VISUALIZER_HTTP_PORT": "18000",
+            "SCRAP_MONITORING_VISUALIZER_CAMERA_ENABLED": "sometimes",
         }
     )
 

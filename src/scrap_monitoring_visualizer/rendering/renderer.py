@@ -23,7 +23,12 @@ from scrap_monitoring_visualizer.limits import (
     MAX_FRAME_WIDTH,
 )
 
-EXPECTED_RENDER_WINDOW = "vtkOSOpenGLRenderWindow"
+SUPPORTED_RENDER_WINDOWS = frozenset(
+    {
+        "vtkEGLRenderWindow",
+        "vtkOSOpenGLRenderWindow",
+    }
+)
 BACKGROUND_COLOR = "#E8EEF4"
 FLOOR_COLOR = "#BCC8D6"
 WALL_COLOR = "#7890A8"
@@ -346,7 +351,7 @@ def render_scene(
             raise RuntimeError("camera did not enable parallel projection")
         plotter.render()
         render_window = type(plotter.render_window).__name__
-        if render_window != EXPECTED_RENDER_WINDOW:
+        if render_window not in SUPPORTED_RENDER_WINDOWS:
             raise RuntimeError(f"unexpected render window: {render_window}")
         image = plotter.screenshot(return_img=True)
         if image is None or image.shape[:2] != (config.height, config.width):

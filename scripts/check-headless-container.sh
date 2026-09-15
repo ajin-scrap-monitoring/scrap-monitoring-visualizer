@@ -36,7 +36,7 @@ readonly -a runtime_options=(
   --pids-limit 128
   --memory 1g
   --cpus 2
-  --tmpfs /tmp:rw,noexec,nosuid,size=64m
+  --tmpfs "/tmp:rw,noexec,nosuid,size=64m"
 )
 
 docker run "${runtime_options[@]}" \
@@ -91,6 +91,13 @@ docker run "${runtime_options[@]}" \
   --mount "type=bind,source=${probe_root}/output,target=/output" \
   --entrypoint python \
   "${image}" \
+  -m scrap_monitoring_visualizer.synthetic_camera.probe \
+  --output /output/camera
+
+docker run "${runtime_options[@]}" \
+  --mount "type=bind,source=${probe_root}/output,target=/output" \
+  --entrypoint python \
+  "${image}" \
   -m scrap_monitoring_visualizer.live_probe \
   --output /output/live
 
@@ -111,6 +118,13 @@ test "$(jq -r '.surface_faces > 0' "${probe_root}/output/scene/scene.json")" = "
 test "$(jq -r '.volume_side_faces > 0' "${probe_root}/output/scene/scene.json")" = "true"
 test "$(jq -c '.height_range_m' "${probe_root}/output/scene/scene.json")" = '[0.0,1.0]'
 test -s "${probe_root}/output/scene/scene.png"
+test "$(jq -r '.format' "${probe_root}/output/camera/camera.json")" = "MJPEG"
+test "$(jq -r '.width' "${probe_root}/output/camera/camera.json")" = "640"
+test "$(jq -r '.height' "${probe_root}/output/camera/camera.json")" = "360"
+test "$(jq -r '.perspective' "${probe_root}/output/camera/camera.json")" = "true"
+test "$(jq -r '.render_backend' "${probe_root}/output/camera/camera.json")" = "vtkOSOpenGLRenderWindow"
+test "$(jq -r '.frame_bytes > 0 and .frame_bytes <= 4194304' "${probe_root}/output/camera/camera.json")" = "true"
+test -s "${probe_root}/output/camera/camera.jpg"
 test "$(jq -r '.frame_before_observation' "${probe_root}/output/live/live.json")" = "204"
 test "$(jq -r '.tcp_response_bytes' "${probe_root}/output/live/live.json")" = "0"
 test "$(jq -r '.frame_status' "${probe_root}/output/live/live.json")" = "200"

@@ -1,0 +1,380 @@
+name: Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: candidate-${{ github.repository }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate current main commit
+        shell: bash
+        run: |
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          main_commit="$(git rev-parse 'refs/remotes/origin/main^{commit}')"
+          if [[ "$GITHUB_REF" != "refs/heads/main" || \
+                "$GITHUB_SHA" != "$main_commit" ]]; then
+            echo "Candidate images can only be built from the current main commit" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.7"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Install Rust audit tools
+        run: |
+          cargo install --locked --version 0.9.2 --features cli cargo-about
+          cargo install --locked --version 0.22.2 cargo-audit
+
+      - name: Prepare candidate image references
+        id: candidate
+        shell: bash
+        run: |
+          version="$(
+            uv run --frozen python -c \
+              'from pathlib import Path; from tools.check_release import project_version; print(project_version(Path.cwd()))'
+          )"
+          candidate_tag="candidate-sha-$GITHUB_SHA"
+          visualizer_image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          edge_bridge_image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/scrap-monitoring-visualizer-edge-bridge"
+          {
+            echo "version=$version"
+            echo "visualizer_image_name=$visualizer_image_name"
+            echo "visualizer_candidate_ref=$visualizer_image_name:$candidate_tag"
+            echo "edge_bridge_image_name=$edge_bridge_image_name"
+            echo "edge_bridge_candidate_ref=$edge_bridge_image_name:$candidate_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate source
+        run: |
+          uv run --frozen rumdl check --no-config --no-cache --disable MD013 .
+          uv run --frozen python tools/check_repository.py
+          uv run --frozen ruff format --check src tests tools
+          uv run --frozen ruff check src tests tools
+          uv run --frozen mypy
+          uv run --frozen python -m pytest
+          uv run --frozen python -m compileall -q src tests tools
+          scripts/check-deployment.sh
+          uv run --frozen python tools/generate_edge_bridge_notices.py --check
+          cargo audit --file edge-bridge/Cargo.lock
+          docker build \
+            --file Dockerfile.edge-bridge \
+            --target test \
+            --tag scrap-monitoring-visualizer-edge-bridge:test \
+            .
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          version: v0.37.1
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish visualizer candidate
+        id: publish_visualizer
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.candidate.outputs.visualizer_candidate_ref }}
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_VERSION=${{ steps.candidate.outputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.candidate.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=candidate-visualizer-amd64
+          cache-to: type=gha,mode=max,scope=candidate-visualizer-amd64
+
+      - name: Build and publish edge bridge candidate
+        id: publish_edge_bridge
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.edge-bridge
+          platforms: linux/arm64
+          target: runtime
+          push: true
+          tags: ${{ steps.candidate.outputs.edge_bridge_candidate_ref }}
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_VERSION=${{ steps.candidate.outputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.candidate.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=candidate-edge-bridge-arm64
+          cache-to: type=gha,mode=max,scope=candidate-edge-bridge-arm64
+
+      - name: Resolve and verify candidate images
+        id: images
+        env:
+          EDGE_BRIDGE_CANDIDATE_REF: ${{ steps.candidate.outputs.edge_bridge_candidate_ref }}
+          EDGE_BRIDGE_IMAGE_NAME: ${{ steps.candidate.outputs.edge_bridge_image_name }}
+          EDGE_BRIDGE_PUBLISHED_DIGEST: ${{ steps.publish_edge_bridge.outputs.digest }}
+          VISUALIZER_CANDIDATE_REF: ${{ steps.candidate.outputs.visualizer_candidate_ref }}
+          VISUALIZER_IMAGE_NAME: ${{ steps.candidate.outputs.visualizer_image_name }}
+          VISUALIZER_PUBLISHED_DIGEST: ${{ steps.publish_visualizer.outputs.digest }}
+        shell: bash
+        run: |
+          verify_image() {
+            local output_prefix="$1"
+            local image_name="$2"
+            local candidate_ref="$3"
+            local published_digest="$4"
+            local expected_architecture="$5"
+            local candidate_digest
+            local image_platform
+            local image_revision
+            local metadata_prefix
+            candidate_digest="$(
+              docker buildx imagetools inspect "$candidate_ref" \
+                --format '{{.Manifest.Digest}}'
+            )"
+            if [[ ! "$published_digest" =~ ^sha256:[0-9a-f]{64}$ || \
+                  "$candidate_digest" != "$published_digest" ]]; then
+              echo "$output_prefix candidate tag does not resolve to its published digest" >&2
+              exit 1
+            fi
+
+            metadata_prefix="$RUNNER_TEMP/$output_prefix-candidate"
+            docker buildx imagetools inspect --raw "$image_name@$published_digest" \
+              > "$metadata_prefix-manifest.json"
+            mapfile -t manifest_digests < <(
+              python - \
+                "$metadata_prefix-manifest.json" \
+                "$expected_architecture" <<'PY'
+          import json
+          import re
+          import sys
+
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              manifest = json.load(source)
+          if manifest.get("mediaType") != "application/vnd.oci.image.index.v1+json":
+              raise SystemExit("candidate image must be an OCI image index")
+
+          entries = manifest.get("manifests", ())
+          runnable = [
+              entry
+              for entry in entries
+              if entry.get("platform", {}).get("os") != "unknown"
+          ]
+          platforms = [
+              (
+                  entry.get("platform", {}).get("os"),
+                  entry.get("platform", {}).get("architecture"),
+              )
+              for entry in runnable
+          ]
+          expected = [("linux", sys.argv[2])]
+          if platforms != expected:
+              raise SystemExit(
+                  f"candidate manifest must contain one {expected[0]} runnable image: "
+                  f"observed {platforms}"
+              )
+
+          runnable_digest = runnable[0].get("digest")
+          if not isinstance(runnable_digest, str) or re.fullmatch(
+              r"sha256:[0-9a-f]{64}", runnable_digest
+          ) is None:
+              raise SystemExit("candidate runnable image has an invalid digest")
+          attestations = [
+              entry
+              for entry in entries
+              if entry.get("platform") == {"architecture": "unknown", "os": "unknown"}
+              and entry.get("annotations", {}).get("vnd.docker.reference.type")
+              == "attestation-manifest"
+              and entry.get("annotations", {}).get("vnd.docker.reference.digest")
+              == runnable_digest
+          ]
+          if len(attestations) != 1 or len(entries) != 2:
+              raise SystemExit(
+                  "candidate index must contain one runnable image and its attestation manifest"
+              )
+          attestation_digest = attestations[0].get("digest")
+          if not isinstance(attestation_digest, str) or re.fullmatch(
+              r"sha256:[0-9a-f]{64}", attestation_digest
+          ) is None:
+              raise SystemExit("candidate attestation has an invalid digest")
+          print(runnable_digest)
+          print(attestation_digest)
+          PY
+            )
+            if [[ "${#manifest_digests[@]}" -ne 2 ]]; then
+              echo "$output_prefix manifest validation did not return both digests" >&2
+              exit 1
+            fi
+
+            runnable_digest="${manifest_digests[0]}"
+            attestation_digest="${manifest_digests[1]}"
+            docker buildx imagetools inspect --raw \
+              "$image_name@$attestation_digest" \
+              > "$metadata_prefix-attestation.json"
+            python - \
+              "$metadata_prefix-attestation.json" \
+              "$runnable_digest" <<'PY'
+          import json
+          import sys
+
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              manifest = json.load(source)
+          if (
+              manifest.get("artifactType")
+              != "application/vnd.docker.attestation.manifest.v1+json"
+          ):
+              raise SystemExit("candidate attestation has an unexpected artifact type")
+          if manifest.get("subject", {}).get("digest") != sys.argv[2]:
+              raise SystemExit("candidate attestation subject differs from the runnable image")
+
+          layers = manifest.get("layers", ())
+          if any(
+              layer.get("mediaType") != "application/vnd.in-toto+json"
+              for layer in layers
+          ):
+              raise SystemExit("candidate attestation layers must use the in-toto media type")
+          predicates = {
+              layer.get("annotations", {}).get("in-toto.io/predicate-type")
+              for layer in layers
+          }
+          if None in predicates:
+              raise SystemExit("candidate attestation layer is missing its predicate type")
+          required = {
+              "https://spdx.dev/Document",
+              "https://slsa.dev/provenance/v1",
+          }
+          if not required.issubset(predicates):
+              raise SystemExit(
+                  f"candidate attestation predicates are incomplete: {sorted(predicates)}"
+              )
+          PY
+
+            docker pull \
+              --platform "linux/$expected_architecture" \
+              "$image_name@$published_digest"
+            image_revision="$(
+              docker image inspect "$image_name@$published_digest" \
+                --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+            )"
+            image_platform="$(
+              docker image inspect "$image_name@$published_digest" \
+                --format '{{.Os}}/{{.Architecture}}'
+            )"
+            if [[ "$image_revision" != "$GITHUB_SHA" || \
+                  "$image_platform" != "linux/$expected_architecture" ]]; then
+              echo "$output_prefix candidate configuration does not match its source" >&2
+              exit 1
+            fi
+            echo "${output_prefix}_digest=$published_digest" >> "$GITHUB_OUTPUT"
+          }
+          verify_image \
+            visualizer \
+            "$VISUALIZER_IMAGE_NAME" \
+            "$VISUALIZER_CANDIDATE_REF" \
+            "$VISUALIZER_PUBLISHED_DIGEST" \
+            amd64
+          verify_image \
+            edge_bridge \
+            "$EDGE_BRIDGE_IMAGE_NAME" \
+            "$EDGE_BRIDGE_CANDIDATE_REF" \
+            "$EDGE_BRIDGE_PUBLISHED_DIGEST" \
+            arm64
+
+      - name: Validate published visualizer candidate
+        env:
+          IMAGE_UNDER_TEST: ${{ steps.candidate.outputs.visualizer_image_name }}@${{ steps.images.outputs.visualizer_digest }}
+          SKIP_IMAGE_BUILD: "true"
+        run: scripts/check-headless-container.sh
+
+      - name: Publish candidate digest summary
+        env:
+          EDGE_BRIDGE_DIGEST: ${{ steps.images.outputs.edge_bridge_digest }}
+          EDGE_BRIDGE_IMAGE_NAME: ${{ steps.candidate.outputs.edge_bridge_image_name }}
+          VISUALIZER_DIGEST: ${{ steps.images.outputs.visualizer_digest }}
+          VISUALIZER_IMAGE_NAME: ${{ steps.candidate.outputs.visualizer_image_name }}
+        shell: bash
+        run: |
+          {
+            echo "## Candidate OCI images"
+            echo
+            echo "| Component | Platform | Digest reference |"
+            echo "| --- | --- | --- |"
+            echo "| Visualizer | linux/amd64 | \`$VISUALIZER_IMAGE_NAME@$VISUALIZER_DIGEST\` |"
+            echo "| Edge bridge | linux/arm64 | \`$EDGE_BRIDGE_IMAGE_NAME@$EDGE_BRIDGE_DIGEST\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify public package visibility
+        env:
+          EDGE_BRIDGE_IMAGE_NAME: ${{ steps.candidate.outputs.edge_bridge_image_name }}
+          GH_TOKEN: ${{ github.token }}
+          VISUALIZER_IMAGE_NAME: ${{ steps.candidate.outputs.visualizer_image_name }}
+        shell: bash
+        run: |
+          verify_public() {
+            local image_name="$1"
+            local package_name
+            local package_path
+            package_name="${image_name##*/}"
+            package_path="/orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package_name"
+            for attempt in 1 2 3 4 5; do
+              visibility="$(gh api "$package_path" --jq .visibility 2>/dev/null || true)"
+              if [[ "$visibility" == "public" ]]; then
+                return 0
+              fi
+              if [[ "$attempt" != 5 ]]; then
+                sleep 3
+              fi
+            done
+            echo "GHCR package $package_name is not public: ${visibility:-unavailable}" >&2
+            return 1
+          }
+          verify_public "$VISUALIZER_IMAGE_NAME"
+          verify_public "$EDGE_BRIDGE_IMAGE_NAME"

@@ -3,32 +3,48 @@
 ## 문서 역할
 
 이 문서는 채택한 구현 설계의 정본이다. 초기 제품 요구사항은
-[프로젝트 명세](project-spec.md), 현재 구현 상태와 검증 순서는
-[개발 계획](development-plan.md)에서 관리한다.
+[프로젝트 명세](project-spec.md), 현재 구현과 검증 상태는
+[개발 계획](development-plan.md), 합성 camera의 외부 계약은
+[합성 카메라 Live 계약](../SYNTHETIC_CAMERA_VIDEO.md)에서 관리한다.
 
-현재 제품 실행 경계는 TCP 관찰 수신과 고정 사선 프레임 하나를 제공하는 Browser 기반 Live
-preview다. 관찰 기록, Replay, 영상 출력과 상면 camera는 제공하지 않는다. 고정 입력인
-프로젝트 명세에는 해당 기능이 남아 있으므로 현재 구현 범위와 다른 항목은 개발 계획에
-명시한다.
+현재 제품은 Browser용 고정 사선 3D 화면과 edge device용 원근 합성 camera stream을
+실시간으로 제공한다. 관찰 기록, replay, 영상 파일, 상면 화면, depth map과 class mask는
+제공하지 않는다.
 
-## 모듈 경계
+## 소스 경계
 
-프로그램은 `src/scrap_monitoring_visualizer/` 아래의 다음 8개 경계로 구성한다.
+Python server는 `src/scrap_monitoring_visualizer/` 아래의 다음 9개 경계로 구성한다.
 
 | 경계 | 책임 |
 | --- | --- |
-| `cli.py` | 환경 변수와 CLI(Command-Line Interface) 인자, 설정 검증과 실행 수명 관리 |
+| `cli.py` | 환경 변수, CLI(Command-Line Interface) 인자와 실행 수명 관리 |
 | `contracts/` | 원본 레코드 해석, schema 및 의미 검증, 내부 불변 자료형 |
-| `receiver/` | TCP(Transmission Control Protocol) 연결 소유권과 LF(Line Feed) 레코드 조립 |
-| `state/` | 실행 식별, sequence 판정, 연결 상태와 최신 관찰 상태 |
-| `geometry/` | 경계 삼각분할, 격자 표면 clipping과 결정론적인 mesh |
-| `rendering/` | 카메라, 장면, overlay와 2D 프레임 렌더링 |
-| `preview/` | HTTP(Hypertext Transfer Protocol) 프레임 및 상태 응답과 브라우저 화면 |
-| `dependency_audit.py` | 실행 image의 의존성 version과 라이선스 고지 경로 inventory |
+| `receiver/` | TCP(Transmission Control Protocol) 연결과 LF(Line Feed) 레코드 조립 |
+| `state/` | 실행 식별, sequence 판정, 연결 상태와 최신 Observation |
+| `geometry/` | 경계 삼각분할, 표면 clipping과 결정론적 mesh |
+| `rendering/` | Browser용 직교투영 장면과 PNG frame |
+| `preview/` | HTTP(Hypertext Transfer Protocol) 상태, PNG와 Browser 화면 |
+| `synthetic_camera/` | Profile, 보간, 원근 장면, camera page, JPEG와 WebSocket stream |
+| `dependency_audit.py` | Server image의 version과 license notice inventory |
 
-`contracts/`의 자료형을 나머지 모듈이 공유한다. `geometry/`는 mesh 수치 배열을 반환하고
-렌더링 엔진을 호출하지 않는다. 네트워크와 렌더링 엔진 호출은 각각 `receiver/`와
-`rendering/`에 격리하며 `cli.py`가 실행 경계를 연결한다.
+`contracts/` 자료형을 geometry와 두 renderer가 공유한다. `geometry/`는 수치 mesh를 반환하고
+VTK(Visualization Toolkit)를 호출하지 않는다. 네트워크, Browser renderer와 합성 camera
+renderer는 각각 `receiver/`, `rendering/`과 `synthetic_camera/`에 격리한다.
+
+Rust edge bridge는 `edge-bridge/src/` 아래의 다음 7개 경계로 구성한다.
+
+| 경계 | 책임 |
+| --- | --- |
+| `main.rs` | 환경 설정, signal과 process 종료 code |
+| `config.rs` | URL, device, timeout과 재연결 구간 검증 |
+| `bridge.rs` | WebSocket session, message 순서와 V4L2 기록 |
+| `descriptor.rs` | Camera descriptor version 1 검증 |
+| `jpeg.rs` | JPEG marker, SOF 크기와 byte 상한 검증 |
+| `device.rs` | V4L2 capability, output format과 frame write |
+| `backoff.rs` | Bounded 지수 재연결 대기 |
+
+Rust bridge는 JPEG를 decode하거나 encode하지 않는다. Server의 Observation 계약과 Python
+package를 의존하지 않고 camera stream 계약만 공유한다.
 
 Parser는 package 내부의 Observation version 1 schema를 기본 입력으로 사용한다. 저장소
 검사는 package schema가 `contracts/observation/v1/`의 고정 사본과 byte 단위로 같은지
@@ -36,139 +52,187 @@ Parser는 package 내부의 Observation version 1 schema를 기본 입력으로 
 
 ## 실행 설정
 
-실행 설정은 CLI 인자, `SCRAP_MONITORING_VISUALIZER_` 접두사의 환경 변수, 코드 기본값 순서로 결정한다.
-실행 mode는 `live` 하나다. CLI 인자는 로컬 실행의 명시적 변경에 사용하고 환경 변수는
-Container 배포 환경의 설정 주입에 사용한다.
+Server 설정은 CLI 인자, `SCRAP_MONITORING_VISUALIZER_` 환경 변수, 코드 기본값 순서로
+결정한다. 실행 mode는 `live` 하나다. Environment와 CLI 값은 같은 `LiveConfig`와 camera
+profile 검증을 거치며 process 시작 뒤에는 다시 읽지 않는다.
 
-환경 변수와 CLI가 제공한 값은 같은 `LiveConfig` 검증을 거친다. 필수 endpoint, port와
-렌더링 해상도는 설정 출처와 관계없이 같은 오류 조건을 적용한다. 프로그램은 환경 변수를
-시작할 때 한 번 읽으며 실행 중 변경을 반영하지 않는다.
+Edge bridge는 `SCRAP_SYNTHETIC_CAMERA_` 환경 변수만 읽는다. Server URL, V4L2 device,
+연결 및 I/O timeout과 재연결 구간을 시작 시 검증한다. 환경 변수 목록과 주입 절차의 정본은
+[README](../README.md)다.
 
 ## 기술 선택
 
-구현에 사용하는 기술 묶음은 다음 5개다. Version은 [의존성](dependencies.md)에서 관리한다.
+구현 기술은 다음 7개 묶음이다. 고정 version과 license는
+[의존성](dependencies.md)에서 관리한다.
 
 | 기술 | 채택 목적 | 공식 출처 |
 | --- | --- | --- |
-| Python과 uv | 수신, 검증과 수치 처리의 단일 언어 구현 및 의존성 고정 | [Python](https://www.python.org/), [uv](https://docs.astral.sh/uv/) |
-| jsonschema | 고정 JSON(JavaScript Object Notation) Schema의 직접 검증 | [jsonschema](https://python-jsonschema.readthedocs.io/) |
-| NumPy | 격자와 mesh의 수치 배열 처리 | [NumPy](https://numpy.org/doc/stable/) |
-| PyVista, VTK(Visualization Toolkit), Mesa와 Pillow | 서버의 소프트웨어 3D 렌더링과 메모리 PNG encoding | [PyVista](https://docs.pyvista.org/getting-started/installation.html), [VTK](https://docs.vtk.org/en/latest/advanced/runtime_settings.html), [Mesa](https://docs.mesa3d.org/), [Pillow](https://python-pillow.github.io/) |
-| FastAPI와 Uvicorn | 최신 프레임과 상태의 제한된 HTTP 서비스 | [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://www.uvicorn.org/) |
+| Python과 uv | Server 조립, 계약 검증과 의존성 고정 | [Python](https://www.python.org/), [uv](https://docs.astral.sh/uv/) |
+| jsonschema | 고정 JSON(JavaScript Object Notation) Schema 검증 | [jsonschema](https://python-jsonschema.readthedocs.io/) |
+| NumPy | 격자, mesh와 image 효과의 수치 배열 처리 | [NumPy](https://numpy.org/doc/stable/) |
+| PyVista, VTK와 Pillow | 직교 및 원근 3D 렌더링과 PNG 및 JPEG encoding | [PyVista](https://docs.pyvista.org/getting-started/installation.html), [VTK](https://docs.vtk.org/en/latest/advanced/runtime_settings.html), [Pillow](https://python-pillow.github.io/) |
+| OSMesa와 EGL | CPU 및 GPU off-screen OpenGL context | [Mesa](https://docs.mesa3d.org/), [EGL Registry](https://registry.khronos.org/EGL/) |
+| FastAPI, Uvicorn과 websockets | HTTP와 WebSocket service | [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://www.uvicorn.org/), [websockets](https://websockets.readthedocs.io/) |
+| Rust, tungstenite와 V4L2 | ARM64의 bounded WebSocket bridge와 virtual camera | [Rust](https://www.rust-lang.org/), [tungstenite](https://crates.io/crates/tungstenite), [V4L2](https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/v4l2.html) |
 
-PyVista의 off-screen rendering은 VTK의 `vtkOSOpenGLRenderWindow`와 Mesa `libosmesa6`를
-사용한다. Container는 `VTK_DEFAULT_OPENGL_WINDOW`로 renderer를 고정하고
-`LIBGL_ALWAYS_SOFTWARE`로 CPU(Central Processing Unit) 경로를 요구한다. Linux AMD64
-비root Container가 GPU와 `DISPLAY` 없이 Live 프레임을 생성하는지 CI에서 검사한다.
+Server image의 기본 renderer는 `vtkOSOpenGLRenderWindow`와 Mesa OSMesa다.
+`LIBGL_ALWAYS_SOFTWARE=1`이 GPU와 `DISPLAY` 없는 CPU 경로를 고정한다. EGL 배포는
+`vtkEGLRenderWindow`와 host GPU runtime을 명시적으로 주입하며 두 renderer가 같은 VTK
+window를 사용한다. Camera profile의 backend 값은 실제로 생성된 window가 배포 선택과
+일치하는지 검사한다.
 
-## 실행 경계
+## 실행 단위와 데이터 흐름
 
-실행 단위는 다음 2개다.
+제품이 관리하는 실행 단위는 다음 4개다.
 
-| 실행 단위 | 담당 작업 |
-| --- | --- |
-| 주 process | CLI, 비동기 수신, 실행 상태와 HTTP preview 관리 |
-| 렌더링 자식 process | Mesh와 장면의 고정 사선 프레임 생성 |
+| 실행 단위 | Platform | 담당 작업 |
+| --- | --- | --- |
+| Server 주 process | Linux AMD64 | CLI, 수신, 상태, HTTP와 두 worker 조정 |
+| Browser render process | Linux AMD64 | 고정 사선 직교투영 PNG 생성 |
+| Synthetic render process | Linux AMD64 | 선택적 보간 frame의 원근 JPEG 생성 |
+| Edge bridge process | Linux ARM64 | WebSocket 수신, 검증과 V4L2 write |
 
-생성기가 Observation을 전송하면 주 process가 레코드를 검증하고 최신 실행 상태를 갱신한다.
-렌더링 자식 process가 완성한 사선 프레임은 하나의 revision으로 교체된다.
+주 process는 유효한 Observation을 최신 실행 상태로 교체한 뒤 Browser worker와 활성화된
+Synthetic worker에 독립적으로 제출한다. 두 renderer가 느려져도 Receiver는 최신 pending
+정책으로 입력을 계속 처리한다.
 
 ```text
-Generator -> Receiver -> Validator -> State -> Latest snapshot -> Renderer
-                                                                    |
-                                                                    v
-                                                              Latest frames
-                                                                    |
-                                                                    v
-Browser <- HTTP preview <--------------------------------------------+
+Generator -> Receiver -> Validator -> Latest State
+                                        |       |
+                                        v       v
+                                  Browser Job  Camera Timeline
+                                        |       |
+                                        v       v
+                                    PNG Store  JPEG Store
+                                        |       |
+                                        v       v
+                                    HTTP Page  WebSocket -> Edge Bridge -> V4L2
 ```
 
-렌더링 자식 process는 한 번에 snapshot 1개를 처리한다. 주 process는 처리 중 도착한 관찰 중
-최신 1개만 대기 상태에 둔다. 렌더링이 끝나면 최신 대기 snapshot을 전달하므로 오래된 중간
-관찰이 수신 event loop와 화면 갱신을 막지 않는다.
+Browser worker는 처리 중 도착한 요청 중 최신 1개만 pending 상태에 둔다. Synthetic worker도
+처리 중 1개와 최신 pending 1개만 유지한다. Synthetic timeline은 이전과 현재 Observation
+사이에서 wall clock 기준 frame 시각을 선택하며 render 처리량이 부족하면 이미 지난 target 중
+최신 1개만 제출한다.
 
 ## 메모리 상태와 상한
 
-메모리에 유지하는 상태는 다음 3개다. 운영 데이터를 영구 저장하는 경로는 없다.
+Server가 메모리에 유지하는 상태는 다음 6개다. 운영 데이터를 영구 저장하는 경로는 없다.
 
 | 보관 지점 | 상한 | 상한 처리 |
 | --- | --- | --- |
 | 실행 상태 | Header와 최신 Observation 각 1개 | 새 실행 또는 최신 Observation으로 교체 |
-| 렌더링 처리 및 대기 snapshot | 처리 중 1개와 대기 1개 | 대기 상태를 새 관찰로 교체 |
-| Preview 프레임 | PNG 1개 | 새 프레임과 식별 정보로 교체 |
+| Browser render queue | 처리 중 1개와 pending 1개 | Pending을 새 요청으로 교체 |
+| Browser frame | 최신 PNG 1개 | 새 revision으로 교체 |
+| Camera interpolation | 이전 및 현재 Observation, bounded target | 새 구간 또는 run으로 교체 |
+| Camera render queue | 처리 중 1개와 pending 1개 | Pending을 새 요청으로 교체 |
+| Camera frame | 최신 JPEG 1개, 최대 4,194,304 byte | 새 revision으로 교체 |
 
-HTTP 요청은 동시에 최대 16개를 처리하고 요청 제한 시간은 5초다. 초과 요청은 거부하고
-지연 연결은 종료한다. Mesh 생성에는 node, face와 clipping 연산량의 유한한 예산을 둔다.
-실제 상한과 기본 프레임 설정은 [실행 환경](deployment.md)에서 관리한다.
-
-렌더링 자식 process는 렌더 결과를 메모리에서 PNG byte로 인코딩한다. 운영 프레임은
-Container filesystem, host volume이나 image layer에 기록하지 않는다.
+HTTP 요청은 동시에 최대 16개를 처리하고 요청 제한 시간은 5 s다. Camera WebSocket client는
+최대 4개를 허용하고 각 frame write 제한 시간은 1 s다. Mesh 생성에는 node, face와 clipping
+연산량의 유한한 예산을 둔다. 실제 상한과 자원 기준은
+[실행 환경](deployment.md)에서 관리한다.
 
 ## 수신과 실행 상태
 
-Receiver는 연결별 byte buffer에서 LF로 끝난 레코드만 validator에 전달한다. Parser는
-중복 JSON key와 유한하지 않은 수치를 거부한다. Schema 검사 뒤에는 좌표 증가, 높이 배열
-shape, 투입구 index, sensor 방향과 경계 형상처럼 schema가 표현하지 않는 의미 제약을
-검사한다.
+Receiver는 연결별 byte buffer에서 LF로 끝난 레코드만 validator에 전달한다. Parser는 중복
+JSON key와 유한하지 않은 수치를 거부한다. Schema 검사 뒤에는 좌표 증가, 높이 배열 shape,
+투입구 index, sensor 방향과 경계 형상처럼 schema가 표현하지 않는 의미 제약을 검증한다.
 
 한 입력 chunk에서 framing 한도 오류가 발생해도 오류 앞에서 완성된 레코드는 순서대로
 처리한다. 한도를 초과한 레코드와 남은 buffer는 폐기하고 해당 연결을 종료한다.
 
 유효한 Header를 수락한 뒤에만 현재 장면을 교체한다. 같은 실행의 재접속 Header는 정적
-정보를 비교하고 기존 sequence 상태에 연결한다. 새 실행으로 전환하면 새 실행의 관찰을
-받기 전까지 이전 실행의 표면을 표시하지 않는다.
+정보를 비교하고 기존 sequence 상태에 연결한다. 새 실행으로 전환하면 새 Observation을
+받기 전까지 이전 실행의 두 frame 저장소를 비운다.
 
 완성된 무효 레코드는 상태를 변경하지 않고 거부한다. Header 실패, framing 한도 초과와
 연결 시작 제한 시간 초과는 해당 연결을 종료한다. 정상 Header 이후의 무효 Observation은
 거부 건수를 표시하고 다음 레코드를 처리한다. 생성기에는 응답 byte를 전송하지 않는다.
 
-주 process는 연결 및 누락 상태 변경도 렌더링 요청으로 전달한다. 관찰이 추가로 오지 않아도
-마지막 장면의 연결 상태 overlay를 갱신한다. 각 Observation은 전체 표면 snapshot이며 이전
-표면에 적용하는 변경분으로 처리하지 않는다.
+각 Observation은 전체 표면 snapshot이며 이전 표면에 적용하는 변경분으로 처리하지 않는다.
+주 process는 연결 상태 변경도 Browser worker에 제출하므로 새 Observation 없이 연결이
+끊겨도 overlay가 갱신된다.
 
-## Mesh와 장면
+## Geometry와 Browser 장면
 
-Geometry는 polygon의 방향과 시작 vertex를 정규화하고 고정 순서의 ear clipping으로 바닥을
+Geometry는 polygon 방향과 시작 vertex를 정규화하고 고정 순서의 ear clipping으로 바닥을
 삼각분할한다. Self-intersection과 퇴화 경계는 의미 검증 오류로 처리한다.
 
-격자는 `index = y_index * x_count + x_index` 순서로 vertex를 구성한다. 각 cell은
-`(y, x)`와 `(y + 1, x + 1)`을 잇는 대각선으로 분할한다. 경계 삼각형과 표면 삼각형의
-교집합을 계산하고 교차점의 Z 값은 원래 표면 삼각형에서 선형 보간한다. 교집합 polygon은
-고정 순서로 삼각분할하며 vertex와 face의 출력 순서를 정규화한다.
+격자는 `index = y_index * x_count + x_index` 순서로 vertex를 구성한다. 각 cell은 `(y, x)`와
+`(y + 1, x + 1)`을 잇는 대각선으로 나눈다. 경계 삼각형과 표면 삼각형의 교집합을 계산하고
+교차점의 Z 값은 원래 표면 삼각형에서 선형 보간한다. 교집합 polygon은 고정 순서로 다시
+삼각분할한다.
 
-표면 mesh의 외곽 edge는 각 꼭짓점에서 `floor_z_m`까지 내려 적재 체적의 옆면을 구성한다.
-수거가 끝나 모든 표면 높이가 바닥 높이와 같으면 퇴화한 옆면은 생성하지 않는다. Sensor는
-입력 계약 검증에만 사용하고 장면에는 표시하지 않는다.
+표면 mesh의 외곽 edge는 각 꼭짓점에서 `floor_z_m`까지 내려 적재 체적 옆면을 구성한다.
+모든 높이가 바닥과 같으면 퇴화한 옆면을 만들지 않는다. Sensor는 계약 검증에만 사용하고
+Browser와 합성 camera 장면에 표시하지 않는다.
 
-고정 사선 camera는 거리에 따른 크기 변화를 제거한 직교 투영을 사용한다. 기본 프레임은
-1280 x 720이다. 적재 표면은 smooth shading과 회색 mesh edge를 함께 적용한다. 적재 표면과
-체적 옆면은 `floor_z_m`부터 `top_z_m`까지 고정한 노랑-주황-적색 높이 색상을 사용한다.
-색상 막대는 표시하지 않는다. 화면 오른쪽 방향으로 가장 멀리 있는 외벽 수직 변에 바닥과
-외벽 상단을 포함한 2 m 간격 높이 눈금을 표시한다. 눈금 숫자는 프레임 높이에 맞춰 16부터
-28까지 조정한다.
+Browser camera는 거리에 따른 크기 변화를 제거한 고정 사선 직교투영을 사용한다. 기본
+frame은 1280 x 720이다. Scrap은 높이에 따른 노랑, 주황과 적색을 사용하고 회색 mesh edge를
+표시한다. 색상 막대는 없으며 화면 오른쪽으로 가장 먼 외벽 수직 변에 바닥, 상단과 2 m 간격
+높이 눈금을 표시한다.
 
-## Preview 인터페이스
+## 합성 camera 장면과 시간축
 
-Preview 경로는 다음 3개다.
+Synthetic renderer는 같은 geometry에 원근 camera, PBR 재질, 조명, seeded scrap 색
+variation, noise와 vignette를 적용한다. Profile 좌표는 Header 경계 중심, 바닥 높이와 최대
+scene span으로 변환한다. 현재 투입구에 chute를 만들고 현재 투입구가 없으면 첫 번째
+투입구를 사용한다.
 
-| 경로 | 응답 |
+첫 Observation은 exact frame이다. 연속 sequence, 같은 run과 격자, 증가하는 시각과 최대
+2 s 간격을 만족하면 높이와 연속 scenario 수치를 선형 보간한다. 경계를 넘는 구간은 오른쪽
+Observation을 hold frame으로 사용한다. 상세 field와 reason 계약은
+[합성 카메라 Live 계약](../SYNTHETIC_CAMERA_VIDEO.md)에서 관리한다.
+
+Renderer는 Header seed와 frame 식별자로 image 효과를 결정하고 Pillow로 JPEG를 메모리에서
+encoding한다. JPEG는 filesystem에 기록하지 않는다.
+
+## 서비스 인터페이스
+
+Visualizer가 제공하는 endpoint는 다음 6개다.
+
+| Endpoint | 응답 |
 | --- | --- |
-| `GET /` | 서버 프레임과 상태를 표시하는 브라우저 화면 |
-| `GET /frame.png` | 최신 고정 사선 프레임 및 revision, 프레임 준비 전 204 |
-| `GET /status` | 연결, 실행, 수신 및 렌더링 sequence, 누락과 마지막 정상 수신 시각 |
+| `GET /` | Server frame과 상태를 표시하는 Browser 화면 |
+| `GET /frame.png` | 최신 직교투영 PNG와 revision, 준비 전 204 |
+| `GET /status` | 연결, Observation, 두 renderer와 camera 상태 |
+| `GET /camera/` | 같은 WebSocket을 사용하는 합성 camera Browser 화면 |
+| `GET /camera/v1/status` | Camera pipeline 상태 |
+| `WebSocket /camera/v1/stream` | Descriptor text 1개 뒤 최신 JPEG binary |
 
-렌더링 worker는 고정 사선 프레임 하나를 만든 뒤 하나의 revision으로 교체한다. Browser는
-프레임 하나를 표시하고 이전 요청이 끝난 뒤 다음 요청을 보낸다.
-HTTP 요청은 보관된 최신 프레임과 상태를 읽으며 렌더링을 직접 시작하지 않는다. 상태에는
-최신 수신 sequence와 화면에 반영된 sequence를 구분하여 렌더링 지연을 표시한다.
-Browser는 상태를 0.5초마다 조회하고 revision이 바뀐 경우에만 PNG를 다시 요청한다.
+Camera 관련 3개 endpoint는 synthetic camera를 활성화한 경우에만 설치한다.
+
+Browser는 상태를 0.5 s마다 조회하고 revision이 바뀐 경우에만 PNG를 요청한다. HTTP 요청은
+보관한 최신 frame과 상태만 읽으며 렌더링을 직접 시작하지 않는다.
+
+Camera Browser와 edge bridge는 최대 4개 client를 허용하는 같은 WebSocket을 사용한다.
+Server는 최신 JPEG를 profile FPS에 맞춰 각 client에 반복 전송하므로 전송 cadence와 고유
+render cadence가 분리된다. Server는 frame 전송과 client disconnect 수신을 동시에 처리하고
+inbound application message는 send-only 계약 위반으로 종료한다. Uvicorn은 inbound message
+4,096 byte, queue 1개와 WebSocket compression 비활성화를 적용한다. Bundled edge bridge와
+연결할 때는 version 1 descriptor, 고정 endpoint, 1920 x 1080, 30 FPS와 최대 4,194,304 byte
+계약을 유지한다.
+
+## Edge device 경계
+
+Edge host는 `v4l2loopback` module로 `/dev/video42`를 만들고 udev가
+`/dev/scrap-synthetic-camera` alias를 제공한다. Module과 device format 설정은 host에서 한
+번 수행한다. Systemd oneshot은 boot마다 modules-load 이후, Docker 이전에 MJPG 1920 x
+1080, 30 FPS와 buffer control을 복원한다. Container에는 device 1개와 host `video` group
+GID만 전달한다.
+
+Bridge는 plain `ws://` URL만 허용하고 URL credential, query와 다른 path를 거부한다.
+Descriptor와 JPEG가 계약을 벗어나면 session을 닫고 재연결한다. Network 오류는 500 ms부터
+30 s까지 지수 backoff로 재시도하며 정상 frame을 기록한 session 뒤에는 backoff를 초기화한다.
+Device capability, format 또는 write 오류는 process 오류로 종료한다.
 
 ## 배포 경계
 
-Release workflow는 원격 `main`의 version tag를 입력으로 Linux AMD64 OCI(Open Container
-Initiative) image와 Python package를 생성한다. Image는 version과 source commit tag를 같은
-manifest digest에 연결하고 source commit, version 및 저장소를 OCI label로 기록한다.
+Release workflow는 원격 `main`의 version tag를 입력으로 AMD64 Visualizer image, ARM64 Edge
+Bridge image와 Python package를 생성한다. 각 image는 version 및 source commit tag를 같은
+manifest digest에 연결하고 source, revision과 version OCI label을 기록한다.
 
-GHCR image에는 SBOM(Software Bill of Materials)과 build provenance를 첨부한다. 게시 후
-workflow가 image를 digest로 가져와 Live CLI, TCP 수신, HTTP preview, headless rendering과
-의존성 고지를 검사한다. 공개 Package 확인까지 통과한 산출물만 GitHub Release에 게시한다.
+두 GHCR(GitHub Container Registry) image에는 SBOM(Software Bill of Materials)과 build
+provenance를 첨부한다. Workflow는 공개 Package와 platform을 검증하고 Visualizer image를
+digest로 가져와 실제 headless rendering을 검사한 뒤에만 GitHub Release를 게시한다. 배포는
+각 Release asset이 제공하는 digest 참조를 사용한다.
