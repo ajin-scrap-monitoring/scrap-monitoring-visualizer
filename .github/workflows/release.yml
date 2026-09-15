@@ -37,6 +37,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups
 
+      - name: Install headless rendering runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libegl1 libgl1
+
       - name: Validate edge bridge dependency notices
         run: |
           cargo install --locked --version 0.9.2 --features cli cargo-about
@@ -66,6 +71,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate source
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYVISTA_OFF_SCREEN: "true"
+          VTK_DEFAULT_OPENGL_WINDOW: vtkEGLRenderWindow
         run: |
           uv run --frozen rumdl check --no-config --no-cache --disable MD013 .
           uv run --frozen python tools/check_repository.py

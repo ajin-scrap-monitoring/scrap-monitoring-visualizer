@@ -100,6 +100,9 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         cls.server_service = (
             cls.root / "deploy/server/scrap-monitoring-visualizer.service"
         ).read_text(encoding="utf-8")
+        cls.server_setup = (cls.root / "deploy/server/setup.sh").read_text(
+            encoding="utf-8"
+        )
 
     def assert_strict_attestation_verification(self, workflow: str) -> None:
         self.assertNotIn("--format '{{json .SBOM}}'", workflow)
@@ -147,6 +150,22 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             with self.subTest(workflow=name):
                 for dependency in required:
                     self.assertEqual(workflow.count(dependency), 1)
+
+    def test_workflows_prepare_headless_source_rendering(self):
+        required = (
+            "sudo apt-get install --yes --no-install-recommends libegl1 libgl1",
+            'LIBGL_ALWAYS_SOFTWARE: "1"',
+            'PYVISTA_OFF_SCREEN: "true"',
+            "VTK_DEFAULT_OPENGL_WINDOW: vtkEGLRenderWindow",
+        )
+        for name, workflow in (
+            ("CI", self.ci),
+            ("Candidate", self.candidate),
+            ("Release", self.release),
+        ):
+            with self.subTest(workflow=name):
+                for setting in required:
+                    self.assertEqual(workflow.count(setting), 1)
 
     def test_release_publishes_two_attested_platform_images(self):
         self.assertIn("platforms: linux/amd64", self.release)
@@ -209,6 +228,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("run-visualizer start", self.server_service)
         self.assertIn("Restart=always", self.server_service)
         self.assertIn('restart: "no"', self.server_compose)
+
+    def test_server_setup_rolls_back_after_session_disconnect(self):
+        self.assertIn("trap 'rollback 129' HUP", self.server_setup)
+        self.assertEqual(self.server_setup.count("trap - ERR HUP INT TERM"), 2)
 
     def test_candidate_is_manual_and_requires_current_main(self):
         trigger = self.candidate.split("permissions:", maxsplit=1)[0]

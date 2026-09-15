@@ -117,7 +117,7 @@ legacy_restart_argument=""
 
 rollback() {
   result="${1:-$?}"
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
   set +e
   systemctl stop scrap-monitoring-visualizer.service
   for index in "${!managed_targets[@]}"; do
@@ -146,6 +146,7 @@ rollback() {
   exit "$result"
 }
 trap rollback ERR
+trap 'rollback 129' HUP
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
@@ -211,5 +212,5 @@ if [[ "$healthy" != true ]]; then
   false
 fi
 
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 rm -r -- "$backup_directory"
