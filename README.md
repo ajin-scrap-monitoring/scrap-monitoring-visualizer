@@ -290,9 +290,9 @@ Docker가 Tailscale 주소보다 먼저 Container를 복원하지 않는다.
 
 `setup.sh`는 실행 중인 기존 `scrap-monitoring-visualizer` standalone Container가 있으면
 restart policy를 제거하고 중지한 뒤 `scrap-monitoring-visualizer-before-systemd-<id>`로
-이름을 바꿔 보존한다. 새 digest Container가 정상 상태가 되지 않으면 기존 설정과 Container를
-자동 복원한다. 성공 후 보존 Container는 수동 rollback에 사용할 수 있으며 자동 시작하지
-않는다.
+이름을 바꿔 보존한다. 새 digest Container가 정상 상태가 되지 않거나 설치 프로세스가 세션
+종료 및 중단 신호를 받으면 기존 설정과 Container를 자동 복원한다. 성공 후 보존 Container는
+수동 rollback에 사용할 수 있으며 자동 시작하지 않는다.
 
 Browser에서 `http://<server-tailnet-ipv4>:18000/`을 열면 3D 화면,
 `http://<server-tailnet-ipv4>:18000/camera/`를 열면 합성 camera live 화면이 표시된다. 첫
