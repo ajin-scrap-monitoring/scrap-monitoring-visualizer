@@ -105,6 +105,7 @@ async def run_probe(output_dir: Path, contract_root: Path) -> dict[str, object]:
             "status_code": status_code,
             "root_status": root_status,
             "root_has_preview": b"/frame.png?revision=" in root_body,
+            "root_has_camera": b'new URL("/camera/v1/stream"' in root_body,
             "connected": status_payload["connected"],
             "received_sequence": status_payload["received_sequence"],
             "rendered_sequence": status_payload["rendered_sequence"],

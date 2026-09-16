@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 from .models import StreamDescriptor
 from .store import LatestJpegStore
@@ -16,105 +16,7 @@ from .store import LatestJpegStore
 CameraStatusProvider = Callable[[], Mapping[str, object]]
 CAMERA_STREAM_PATH = "/camera/v1/stream"
 CAMERA_STATUS_PATH = "/camera/v1/status"
-CAMERA_PAGE_PATH = "/camera/"
 _MAX_CAMERA_CLIENTS = 4
-
-_CAMERA_HTML = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Synthetic Camera - Scrap Monitoring Visualizer</title>
-  <style>
-    body{margin:0;background:#f4f6f8;color:#202124;font:14px sans-serif}
-    main{max-width:1920px;margin:auto;padding:24px}
-    h1{font-size:20px;margin:0 0 12px}
-    figure{margin:0}
-    img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#111;border:1px solid #9aa0a6}
-    figcaption{margin-top:8px;color:#4b5563}
-  </style>
-</head>
-<body><main>
-  <h1>Synthetic camera</h1>
-  <figure>
-    <img id="camera" alt="Live synthetic camera frame">
-    <figcaption id="status">Connecting.</figcaption>
-  </figure>
-</main><script>
-const frame=document.getElementById("camera");
-const statusNode=document.getElementById("status");
-let socket=null;
-let visibleUrl=null;
-let pendingBlob=null;
-let decoding=false;
-let descriptor=null;
-let retryTimer=null;
-
-async function displayLatest(){
-  if(decoding)return;
-  decoding=true;
-  while(pendingBlob!==null){
-    const blob=pendingBlob;
-    pendingBlob=null;
-    const nextUrl=URL.createObjectURL(blob);
-    await new Promise(resolve=>{
-      frame.onload=resolve;
-      frame.onerror=resolve;
-      frame.src=nextUrl;
-    });
-    if(visibleUrl!==null)URL.revokeObjectURL(visibleUrl);
-    visibleUrl=nextUrl;
-  }
-  decoding=false;
-}
-
-function reconnect(){
-  clearTimeout(retryTimer);
-  retryTimer=setTimeout(connect,1000);
-}
-
-function connect(){
-  descriptor=null;
-  statusNode.textContent="Connecting.";
-  const url=new URL("v1/stream",window.location.href);
-  url.protocol=window.location.protocol==="https:"?"wss:":"ws:";
-  socket=new WebSocket(url);
-  socket.binaryType="blob";
-  socket.onmessage=event=>{
-    if(typeof event.data==="string"){
-      try{
-        const value=JSON.parse(event.data);
-        if(value.type!=="camera_stream_descriptor"||value.version!==1||value.format!=="MJPEG")throw new Error("Unsupported camera stream.");
-        descriptor=value;
-        statusNode.textContent=`Live ${value.width}x${value.height} ${value.format} ${value.fps} FPS`;
-      }catch(error){
-        statusNode.textContent=String(error);
-        socket.close(1002,"invalid descriptor");
-      }
-      return;
-    }
-    if(descriptor===null){
-      socket.close(1002,"descriptor required");
-      return;
-    }
-    pendingBlob=event.data;
-    displayLatest();
-  };
-  socket.onerror=()=>socket.close();
-  socket.onclose=()=>{
-    statusNode.textContent="Disconnected. Reconnecting.";
-    reconnect();
-  };
-}
-
-window.addEventListener("beforeunload",()=>{
-  clearTimeout(retryTimer);
-  if(socket!==null)socket.close();
-  if(visibleUrl!==null)URL.revokeObjectURL(visibleUrl);
-});
-connect();
-</script></body></html>
-"""
 
 
 class _ConnectionGate:
@@ -163,10 +65,6 @@ def install_camera_routes(
         fps=fps,
         max_frame_bytes=store.max_frame_bytes,
     )
-
-    @app.get(CAMERA_PAGE_PATH)
-    async def camera_page() -> HTMLResponse:
-        return HTMLResponse(_CAMERA_HTML, headers={"Cache-Control": "no-store"})
 
     @app.get(CAMERA_STATUS_PATH)
     async def camera_status() -> JSONResponse:

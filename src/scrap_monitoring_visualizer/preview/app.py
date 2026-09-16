@@ -21,42 +21,142 @@ _INDEX_HTML = """<!doctype html>
   <title>Scrap Monitoring Visualizer</title>
   <style>
     body{margin:0;background:#f4f6f8;color:#202124;font:14px sans-serif}
-    main{max-width:1400px;margin:auto;padding:24px}
-    figure{margin:0}
-    figcaption{font-weight:600;margin:0 0 8px}
-    nav{margin:0 0 12px}
-    img{display:block;width:100%;background:#fff;border:1px solid #9aa0a6}
+    main{max-width:1920px;margin:auto;padding:24px}
+    h1{font-size:20px;margin:0 0 16px}
+    .views{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    figure{min-width:0;margin:0}
+    figcaption{margin:0 0 8px}
+    .visual{box-sizing:border-box;display:block;width:100%;aspect-ratio:16/9;object-fit:contain;border:1px solid #9aa0a6}
+    #model{background:#fff}
+    #camera{background:#111}
+    .camera-state{color:#4b5563;margin-top:8px;min-height:1.2em}
+    details{margin-top:16px}
+    summary{cursor:pointer}
     pre{white-space:pre-wrap;background:#fff;border:1px solid #dadce0;padding:12px}
+    @media(max-width:900px){.views{grid-template-columns:1fr}}
   </style>
 </head>
 <body><main>
   <h1>Scrap Monitoring Visualizer</h1>
-  <nav><a id="camera-link" href="/camera/" hidden>Open synthetic camera</a></nav>
-  <figure><figcaption>3D model</figcaption>
-    <img id="frame" alt="Latest rendered observation">
-  </figure>
-  <pre id="status">Waiting for server status.</pre>
+  <section class="views">
+    <figure>
+      <figcaption><span>3D model</span></figcaption>
+      <img class="visual" id="model" alt="Latest rendered observation">
+    </figure>
+    <figure>
+      <figcaption><span>Synthetic camera</span></figcaption>
+      <img class="visual" id="camera" alt="Live synthetic camera frame">
+      <div class="camera-state" id="camera-state">Waiting for camera status.</div>
+    </figure>
+  </section>
+  <details><summary>Runtime status</summary><pre id="status">Waiting for server status.</pre></details>
 </main><script>
-const frame=document.getElementById("frame");
+const model=document.getElementById("model");
+const camera=document.getElementById("camera");
+const cameraState=document.getElementById("camera-state");
 const statusNode=document.getElementById("status");
-const cameraLink=document.getElementById("camera-link");
 let displayedRevision=null;
+let cameraEnabled=false;
+let cameraSocket=null;
+let cameraDescriptor=null;
+let cameraVisibleUrl=null;
+let cameraPendingBlob=null;
+let cameraDecoding=false;
+let cameraRetryTimer=null;
+
+async function displayLatestCameraFrame(){
+  if(cameraDecoding)return;
+  cameraDecoding=true;
+  while(cameraPendingBlob!==null){
+    const blob=cameraPendingBlob;
+    cameraPendingBlob=null;
+    const nextUrl=URL.createObjectURL(blob);
+    await new Promise(resolve=>{
+      camera.onload=resolve;
+      camera.onerror=resolve;
+      camera.src=nextUrl;
+    });
+    if(cameraVisibleUrl!==null)URL.revokeObjectURL(cameraVisibleUrl);
+    cameraVisibleUrl=nextUrl;
+  }
+  cameraDecoding=false;
+}
+
+function reconnectCamera(){
+  clearTimeout(cameraRetryTimer);
+  if(cameraEnabled)cameraRetryTimer=setTimeout(connectCamera,1000);
+}
+
+function connectCamera(){
+  if(!cameraEnabled||cameraSocket?.readyState===WebSocket.OPEN||cameraSocket?.readyState===WebSocket.CONNECTING)return;
+  cameraDescriptor=null;
+  cameraState.textContent="Connecting.";
+  const url=new URL("/camera/v1/stream",window.location.href);
+  url.protocol=window.location.protocol==="https:"?"wss:":"ws:";
+  const socket=new WebSocket(url);
+  cameraSocket=socket;
+  socket.binaryType="blob";
+  socket.onmessage=event=>{
+    if(typeof event.data==="string"){
+      try{
+        const value=JSON.parse(event.data);
+        if(value.type!=="camera_stream_descriptor"||value.version!==1||value.format!=="MJPEG")throw new Error("Unsupported camera stream.");
+        cameraDescriptor=value;
+        cameraState.textContent=`Live ${value.width}x${value.height} ${value.format} ${value.fps} FPS`;
+      }catch(error){
+        cameraState.textContent=String(error);
+        socket.close(1002,"invalid descriptor");
+      }
+      return;
+    }
+    if(cameraDescriptor===null){
+      socket.close(1002,"descriptor required");
+      return;
+    }
+    cameraPendingBlob=event.data;
+    displayLatestCameraFrame();
+  };
+  socket.onerror=()=>socket.close();
+  socket.onclose=()=>{
+    if(cameraSocket===socket)cameraSocket=null;
+    if(cameraEnabled){
+      cameraState.textContent="Disconnected. Reconnecting.";
+      reconnectCamera();
+    }else{
+      cameraState.textContent="Camera disabled.";
+    }
+  };
+}
+
 async function refresh(){
   try{
     const response=await fetch("/status",{cache:"no-store"});
     const status=await response.json();
     statusNode.textContent=JSON.stringify(status,null,2);
-    cameraLink.hidden=status.synthetic_camera?.camera_enabled!==true;
+    cameraEnabled=status.synthetic_camera?.camera_enabled===true;
+    if(cameraEnabled){
+      connectCamera();
+    }else{
+      cameraState.textContent="Camera disabled.";
+      if(cameraSocket!==null)cameraSocket.close();
+    }
     if(status.frame_revision!==null&&status.frame_revision!==displayedRevision){
-      frame.src="/frame.png?revision="+status.frame_revision;
+      model.src="/frame.png?revision="+status.frame_revision;
       displayedRevision=status.frame_revision;
     }else if(status.frame_revision===null){
-      frame.removeAttribute("src");
+      model.removeAttribute("src");
       displayedRevision=null;
     }
   }catch(error){statusNode.textContent=String(error);}
   setTimeout(refresh,500);
 }
+
+window.addEventListener("beforeunload",()=>{
+  cameraEnabled=false;
+  clearTimeout(cameraRetryTimer);
+  if(cameraSocket!==null)cameraSocket.close();
+  if(cameraVisibleUrl!==null)URL.revokeObjectURL(cameraVisibleUrl);
+});
 refresh();
 </script></body></html>
 """

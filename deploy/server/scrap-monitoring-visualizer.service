@@ -8,7 +8,7 @@ Requires=docker.service
 Type=simple
 EnvironmentFile=/etc/scrap-monitoring-visualizer/server.env
 ExecStartPre=/usr/bin/tailscale wait --timeout=120s
-ExecStartPre=/usr/bin/tailscale ip --assert=${SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS}
+ExecStartPre=/usr/bin/tailscale ip --assert=${SCRAP_MONITORING_VISUALIZER_TAILNET_ADDRESS}
 ExecStartPre=/usr/local/libexec/scrap-monitoring/run-visualizer validate
 ExecStart=/usr/local/libexec/scrap-monitoring/run-visualizer start
 ExecStop=/usr/local/libexec/scrap-monitoring/run-visualizer stop

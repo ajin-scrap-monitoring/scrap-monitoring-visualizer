@@ -97,7 +97,7 @@ jobs:
           uv run --frozen python tools/generate_edge_bridge_notices.py --check
           cargo audit --file edge-bridge/Cargo.lock
           docker build \
-            --file Dockerfile.edge-bridge \
+            --file edge-bridge/Dockerfile \
             --target test \
             --tag scrap-monitoring-visualizer-edge-bridge:test \
             .
@@ -146,7 +146,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: Dockerfile.edge-bridge
+          file: edge-bridge/Dockerfile
           platforms: linux/arm64
           target: runtime
           push: true

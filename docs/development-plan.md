@@ -15,14 +15,14 @@
 
 | 출력 | 현재 구현 |
 | --- | --- |
-| Browser preview | 고정 사선 직교투영 3D frame 1개와 상태 |
-| Synthetic camera | Browser live page, 1920 x 1080 30 FPS MJPEG와 ARM64 V4L2 bridge |
+| Browser preview | 고정 사선 직교투영 3D frame, 합성 camera live 영상과 상태의 단일 페이지 |
+| Synthetic camera | 1920 x 1080 30 FPS MJPEG와 ARM64 V4L2 bridge |
 
 관찰 기록, replay, MP4, 상면 Browser 화면, depth map과 class mask는 제공하지 않는다.
 `docs/project-spec.md`는 고정 입력이므로 수정하지 않는다. 현재 제품 결정과 다른 고정 명세
 항목은 이 계획에서 완료 조건으로 사용하지 않는다.
 
-Release target은 `v1.1.0`이며 CI(Continuous Integration), CodeQL, 두 image의 릴리스 정책
+Release target은 `v2.0.0`이며 CI(Continuous Integration), CodeQL, 두 image의 릴리스 정책
 검사와 실제 90 frame 검증을 완료 조건으로 사용한다.
 
 ## 단계와 선행 관계
@@ -120,7 +120,7 @@ P8 구현 산출물은 다음 8개다.
 | Version 1 camera profile과 내장 현장 시점 | 구현 |
 | 연속 Observation의 30 Hz frame 선택과 bounded 보간 | 구현 |
 | 원근 PBR 장면, seeded 효과와 JPEG encoding | 구현 |
-| 최신 JPEG WebSocket, Browser page와 camera 상태 endpoint | 구현 |
+| 최신 JPEG WebSocket, 통합 Browser 화면과 camera 상태 endpoint | 구현 |
 | Rust descriptor 및 JPEG validator와 재연결 | 구현 |
 | `/dev/video42` V4L2 writer와 semantic alias 설정 | 구현 |
 | Linux ARM64 edge image와 Compose 배포 파일 | 구현 |
@@ -139,7 +139,7 @@ P8 완료 조건은 다음 7개다.
 1. PR의 필수 `CI`와 CodeQL 검사 통과
 2. 원격 `main` squash merge와 이슈 및 Project 상태 완료
 3. Release 전 version, tag ancestry, 두 image platform, SBOM과 provenance logic 재검토
-4. `v1.1.0` tag 1개를 통한 GitHub Release와 Public GHCR image 2개 게시
+4. `v2.0.0` tag 1개를 통한 GitHub Release와 Public GHCR image 2개 게시
 5. Release asset digest를 사용하는 AMD64 server와 ARM64 edge device 배포
 6. Edge V4L2 camera의 MJPEG 1920 x 1080 frame 90개를 2.5 s부터 5 s 안에 수신하고 decode
 7. 연결 중단과 재연결, camera 상태, server 및 edge 자원 사용 확인

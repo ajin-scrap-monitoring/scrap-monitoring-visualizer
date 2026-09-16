@@ -17,14 +17,14 @@ stream으로 변환하고 edge device의 V4L2 camera로 제공하는 계약의 �
 
 | 구성 요소 | 책임 |
 | --- | --- |
-| LiDAR Generator | Header와 시간별 전체 적재면 Observation 전송 |
+| LiDAR Simulator | Header와 시간별 전체 적재면 Observation 전송 |
 | Synthetic camera pipeline | Frame 시각 선택, 보간과 bounded render 요청 관리 |
 | Perspective renderer | 현장 camera 시점의 PBR(Physically Based Rendering) 장면과 JPEG 생성 |
-| Camera service | Live Browser page, 상태, descriptor와 최신 JPEG 전송 |
+| Camera service | 통합 Browser 화면, 상태, descriptor와 최신 JPEG 전송 |
 | Rust edge bridge | Stream 검증, 재연결과 V4L2 output 기록 |
 
 Renderer와 WebSocket은 Linux AMD64 Visualizer image에서 실행한다. Bridge는 Linux ARM64
-edge image에서 실행하며 LiDAR Generator나 실제 camera process를 변경하지 않는다.
+edge image에서 실행하며 LiDAR Simulator나 실제 camera process를 변경하지 않는다.
 
 ## 입력과 profile
 
@@ -98,8 +98,10 @@ WebSocket의 30 FPS는 30개의 binary message를 1초에 전송하는 cadence �
 
 ## 렌더링
 
-Renderer는 같은 geometry 경계에서 바닥, 외벽, 적재 체적, scrap 표면과 현재 투입구의
-chute를 구성한다. Collecting 상태처럼 현재 투입구가 없으면 첫 번째 투입구를 사용한다.
+Renderer는 같은 geometry 경계에서 바닥, 외벽, 적재 체적, scrap 표면과 chute를 구성한다.
+Chute 상단 mount는 투입구 좌표 평균에 고정한다. 하단 outlet의 중심은 현재 투입구 좌표에
+두고 투입구 index가 증가할 때 시계방향 자세를 선택한다. Collecting 상태처럼 현재 투입구가
+없으면 첫 번째 투입구를 사용한다.
 Scrap 표면에는 높이 색 범례나 Browser overlay를 넣지 않는다. Camera profile이 지정한 원근
 시점, PBR 재질과 조명을 사용하고 Header seed와 frame 식별자로 결정되는 scrap 색 variation,
 noise와 vignette를 적용한다.
@@ -116,17 +118,16 @@ noise와 vignette를 적용한다.
 
 ## Browser와 WebSocket 계약
 
-Camera service의 고정 endpoint는 다음 3개다.
+Camera service의 고정 endpoint는 다음 2개다.
 
 | Endpoint | 응답 |
 | --- | --- |
-| `GET /camera/` | MJPEG stream을 표시하고 연결이 끊기면 재연결하는 live 페이지 |
 | `GET /camera/v1/status` | Pipeline, frame, backend와 최근 오류 상태 JSON |
 | `WebSocket /camera/v1/stream` | Descriptor text 뒤 최신 JPEG binary stream |
 
-Application 인증과 TLS(Transport Layer Security)는 제공하지 않는다. `/camera/` page와 edge
-bridge는 같은 WebSocket endpoint를 사용하며 동시 client는 최대 4개다. 다섯 번째 client는
-WebSocket code 1013으로 종료한다.
+Application 인증과 TLS(Transport Layer Security)는 제공하지 않는다. 루트 Browser 화면과
+edge bridge는 같은 WebSocket endpoint를 사용하며 동시 client는 최대 4개다. 다섯 번째
+client는 WebSocket code 1013으로 종료한다.
 
 Server는 내장 edge 호환 profile에서 연결을 수락한 뒤 첫 message로 다음 UTF-8 text
 descriptor를 보낸다. 사용자 profile은 같은 field에 설정한 영상 값을 넣으며 bundled edge
@@ -178,6 +179,11 @@ Bridge는 최신 frame 1개만 보관하고 절대 deadline을 기준으로 30 H
 service를 활성화해 재부팅할 때마다 module 적재 뒤 device format과 buffer control을 복원하고
 그 뒤 Docker를 시작한다.
 
+V4L2 loopback은 각 capture buffer에 연속 sequence와 edge host의 monotonic EOF(End Of Frame)
+timestamp를 제공한다. 이는 일반 camera consumer가 시간순 정렬에 사용하는 V4L2 metadata다.
+UVC(USB Video Class) hardware의 PTS(Presentation Time Stamp), STC(Source Time Clock)와 USB
+SOF(Start Of Frame) counter는 합성하지 않는다.
+
 ## 상태와 저장 경계
 
 합성 camera가 메모리에 유지하는 운영 상태는 다음 4개다.
@@ -208,7 +214,7 @@ process가 종료되면 Visualizer도 오류로 종료돼 Container restart 정�
 7. Descriptor 우선순위, WebSocket client 상한과 30 Hz 반복 전송
 8. Rust descriptor, JPEG marker, 크기와 byte 상한 검증
 9. V4L2 capability, FourCC, 해상도와 device 오류 처리
-10. 실제 V4L2 camera의 90 frame capture, cadence, packet 수와 decode
+10. 실제 V4L2 camera의 90 frame capture, cadence, packet 수, decode, sequence와 timestamp
 
 Pixel 전체 snapshot은 사용하지 않는다. 실제 장비 검증은
 `deploy/edge/check-90-frames.sh`로 90개 MJPEG frame을 2.5 s부터 5 s 안에 받고 모두 decode할

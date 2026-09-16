@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Protocol
@@ -162,29 +163,46 @@ def _chute_poly_data(header: Header, observation: Observation) -> pv.PolyData:
     inlet_index = observation.scenario.current_inlet_index
     if inlet_index is None:
         inlet_index = 0
-    center_x, center_y = header.scene.inlet_positions_xy_m[inlet_index]
+    lower_center_x, lower_center_y = header.scene.inlet_positions_xy_m[inlet_index]
+    upper_center_x = sum(point[0] for point in header.scene.inlet_positions_xy_m) / len(
+        header.scene.inlet_positions_xy_m
+    )
+    upper_center_y = sum(point[1] for point in header.scene.inlet_positions_xy_m) / len(
+        header.scene.inlet_positions_xy_m
+    )
     boundary = header.scene.boundary_xy_m
     planar_scale = max(
         max(point[0] for point in boundary) - min(point[0] for point in boundary),
         max(point[1] for point in boundary) - min(point[1] for point in boundary),
         1.0,
     )
-    lower_z = header.scene.top_z_m - 0.18 * planar_scale
-    upper_z = header.scene.top_z_m + 0.1 * planar_scale
-    lower_x = 0.075 * planar_scale
-    lower_y = 0.045 * planar_scale
-    upper_x = 0.15 * planar_scale
-    upper_y = 0.1 * planar_scale
+    lower_z = header.scene.top_z_m + 0.15 * planar_scale
+    upper_z = header.scene.top_z_m + 0.48 * planar_scale
+    lower_x = 0.13 * planar_scale
+    lower_y = 0.08 * planar_scale
+    upper_x = 0.2 * planar_scale
+    upper_y = 0.14 * planar_scale
+    angle = math.radians(-15.0 * inlet_index)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+
+    def lower_point(x: float, y: float) -> tuple[float, float, float]:
+        return (
+            lower_center_x + x * cosine - y * sine,
+            lower_center_y + x * sine + y * cosine,
+            lower_z,
+        )
+
     points = np.asarray(
         (
-            (center_x - lower_x, center_y - lower_y, lower_z),
-            (center_x + lower_x, center_y - lower_y, lower_z),
-            (center_x + lower_x, center_y + lower_y, lower_z),
-            (center_x - lower_x, center_y + lower_y, lower_z),
-            (center_x - upper_x, center_y - upper_y, upper_z),
-            (center_x + upper_x, center_y - upper_y, upper_z),
-            (center_x + upper_x, center_y + upper_y, upper_z),
-            (center_x - upper_x, center_y + upper_y, upper_z),
+            lower_point(-lower_x, -lower_y),
+            lower_point(lower_x, -lower_y),
+            lower_point(lower_x, lower_y),
+            lower_point(-lower_x, lower_y),
+            (upper_center_x - upper_x, upper_center_y - upper_y, upper_z),
+            (upper_center_x + upper_x, upper_center_y - upper_y, upper_z),
+            (upper_center_x + upper_x, upper_center_y + upper_y, upper_z),
+            (upper_center_x - upper_x, upper_center_y + upper_y, upper_z),
         ),
         dtype=np.float64,
     )
@@ -241,6 +259,7 @@ def _add_chute(
         metallic=material.metallic,
         pbr=True,
         roughness=material.roughness,
+        ambient=0.3,
         smooth_shading=False,
         show_edges=True,
     )

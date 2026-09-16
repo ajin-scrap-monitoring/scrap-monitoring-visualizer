@@ -21,6 +21,7 @@ capture="$temporary_directory/capture.mkv"
 v4l2-ctl --device "$device" --get-fmt-video
 started_at_nanoseconds="$(date +%s%N)"
 timeout 15s ffmpeg \
+  -nostdin \
   -hide_banner \
   -loglevel error \
   -f v4l2 \
@@ -68,5 +69,48 @@ if [[ "$maximum_packet_bytes" -le 0 || "$maximum_packet_bytes" -gt 4194304 ]]; t
   exit 1
 fi
 
-ffmpeg -hide_banner -loglevel error -i "$capture" -frames:v 90 -f null -
-echo "OK: captured 90 MJPEG 1920x1080 frames in $elapsed_milliseconds ms; max packet $maximum_packet_bytes bytes"
+ffmpeg -nostdin -hide_banner -loglevel error -i "$capture" -frames:v 90 -f null -
+
+buffer_probe="$(
+  v4l2-ctl \
+    --device "$device" \
+    --verbose \
+    --stream-mmap=2 \
+    --stream-count=5 \
+    --stream-to=/dev/null \
+    --stream-poll \
+    --stream-show-delta-now \
+    2>&1
+)"
+mapfile -t buffer_lines < <(grep 'cap dqbuf:' <<< "$buffer_probe")
+if [[ "${#buffer_lines[@]}" -ne 5 ]]; then
+  echo "expected 5 V4L2 buffer records" >&2
+  exit 1
+fi
+previous_sequence=-1
+previous_timestamp=0
+for line in "${buffer_lines[@]}"; do
+  if [[ "$line" != *'(ts-monotonic, ts-src-eof)'* ]]; then
+    echo "V4L2 buffer must use a monotonic EOF timestamp: $line" >&2
+    exit 1
+  fi
+  sequence="$(sed -n 's/.* seq: *\([0-9][0-9]*\) .*/\1/p' <<< "$line")"
+  timestamp="$(sed -n 's/.* ts: *\([0-9][0-9]*\.[0-9][0-9]*\) .*/\1/p' <<< "$line")"
+  if [[ -z "$sequence" || -z "$timestamp" ]]; then
+    echo "cannot parse V4L2 sequence or timestamp: $line" >&2
+    exit 1
+  fi
+  if [[ "$previous_sequence" -ge 0 && "$sequence" -ne $((previous_sequence + 1)) ]]; then
+    echo "V4L2 sequence is not contiguous: $previous_sequence then $sequence" >&2
+    exit 1
+  fi
+  if ! awk -v current="$timestamp" -v previous="$previous_timestamp" \
+    'BEGIN { exit !(current > previous) }'; then
+    echo "V4L2 timestamp is not increasing: $previous_timestamp then $timestamp" >&2
+    exit 1
+  fi
+  previous_sequence="$sequence"
+  previous_timestamp="$timestamp"
+done
+
+echo "OK: captured 90 MJPEG 1920x1080 frames in $elapsed_milliseconds ms; max packet $maximum_packet_bytes bytes; V4L2 sequence and monotonic EOF timestamps verified"

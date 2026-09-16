@@ -17,6 +17,20 @@ SCRAP_MONITORING_VISUALIZER_ENV_FILE="$PWD/.env.example" docker compose \
   --env-file .env.example \
   --file deploy/server/compose.yml \
   config --quiet --no-env-resolution --no-path-resolution
+server_config="$(
+  SCRAP_MONITORING_VISUALIZER_ENV_FILE="$PWD/.env.example" docker compose \
+    --env-file .env.example \
+    --file deploy/server/compose.yml \
+    config --no-env-resolution --no-path-resolution
+)"
+for port in 17000 18000; do
+  grep --quiet --fixed-strings "target: $port" <<< "$server_config"
+  grep --quiet --fixed-strings "published: \"$port\"" <<< "$server_config"
+done
+if grep --quiet --fixed-strings 'host_ip:' <<< "$server_config"; then
+  echo "server ports must not restrict the host interface" >&2
+  exit 1
+fi
 SCRAP_MONITORING_VISUALIZER_ENV_FILE="$PWD/.env.example" docker compose \
   --env-file .env.example \
   --file deploy/server/compose.yml \

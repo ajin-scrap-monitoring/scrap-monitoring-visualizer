@@ -112,7 +112,7 @@ Rust 고정 의존성과 release binary를 Container에서 검사한다.
 
 ```bash
 docker build \
-  --file Dockerfile.edge-bridge \
+  --file edge-bridge/Dockerfile \
   --target test \
   --tag scrap-monitoring-visualizer-edge-bridge:test \
   .

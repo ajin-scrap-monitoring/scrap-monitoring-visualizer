@@ -21,14 +21,15 @@ Observation을 사용하지만 서로 다른 renderer와 최신 frame 저장소�
 digest 참조를 사용한다. `latest` tag는 제공하지 않는다.
 
 ```text
-LiDAR Generator -> Visualizer Server -> WebSocket -> Edge Bridge -> V4L2 Camera
+LiDAR Simulator -> Visualizer Server -> WebSocket -> Edge Bridge -> V4L2 Camera
                            |
                            +-> Browser Preview
 ```
 
 ## 빠른 시작
 
-Docker Engine과 `curl`이 있는 Linux AMD64 checkout에서 공개 fixture로 첫 화면을 만든다.
+Docker Engine, Bash, `curl`과 GNU Coreutils가 있는 Linux AMD64 checkout에서 공개 fixture로
+첫 화면을 만든다.
 
 ```bash
 docker build --tag scrap-monitoring-visualizer:quick-start .
@@ -37,17 +38,23 @@ docker run --detach --rm \
   --publish 127.0.0.1:17000:17000 \
   --publish 127.0.0.1:18000:18000 \
   --env-file .env.example \
+  --env SCRAP_MONITORING_VISUALIZER_CAMERA_ENABLED=true \
   scrap-monitoring-visualizer:quick-start \
   live
 until curl --fail --silent http://127.0.0.1:18000/status >/dev/null; do sleep 1; done
-bash -c 'exec 3<>/dev/tcp/127.0.0.1/17000; cat contracts/observation/v1/fixtures/observation.v1.jsonl >&3; sleep 2'
+bash -c 'exec 3<>/dev/tcp/127.0.0.1/17000; cat contracts/observation/v1/fixtures/observation.v1.jsonl >&3; sleep 300' &
+PRODUCER_PID=$!
+timeout 60s bash -c \
+  "until curl --fail --silent http://127.0.0.1:18000/status | grep --quiet '\"camera_frame_revision\":[1-9][0-9]*'; do sleep 1; done"
 curl --fail http://127.0.0.1:18000/status
 ```
 
-Browser에서 `http://127.0.0.1:18000/`을 열면 고정 사선 3D 화면이 표시된다. 확인 뒤 다음
-명령으로 Container를 종료한다.
+Browser에서 `http://127.0.0.1:18000/`을 열면 고정 사선 3D 화면과 합성 camera 영상이 한
+페이지에 표시된다. 확인 뒤 다음 명령으로 Container를 종료한다.
 
 ```bash
+kill "$PRODUCER_PID" 2>/dev/null || true
+wait "$PRODUCER_PID" 2>/dev/null || true
 docker stop scrap-monitoring-visualizer-quick-start
 ```
 
@@ -57,8 +64,16 @@ docker stop scrap-monitoring-visualizer-quick-start
 
 Visualizer 설정은 CLI(Command-Line Interface) 인자, 다음 9개
 `SCRAP_MONITORING_VISUALIZER_` 환경 변수, 코드 기본값 순서로 결정한다. Container는 환경
-변수로 설정하고 프로그램은 시작할 때 한 번 읽는다. `.env.example`의 image와 publish 주소
-2개는 server Compose 전용이며 Visualizer 설정에 포함되지 않는다.
+변수로 설정하고 프로그램은 시작할 때 한 번 읽는다. `.env.example`의 image와 Tailnet 준비
+확인 주소 2개는 server 배포 전용이며 Visualizer 설정에 포함되지 않는다.
+
+| Server 배포 변수 | 값 | 용도 |
+| --- | --- | --- |
+| `SCRAP_MONITORING_VISUALIZER_IMAGE` | Release asset의 digest 참조 | Compose가 실행할 AMD64 image |
+| `SCRAP_MONITORING_VISUALIZER_TAILNET_ADDRESS` | Server의 Tailnet IPv4 주소 | Systemd의 Tailscale 준비 확인 |
+
+Tailnet 주소는 host port binding 값이 아니다. Compose는 TCP 17000과 HTTP 18000을 host의
+모든 interface에 publish한다.
 
 | 환경 변수 | CLI option | 기본값 | 용도 |
 | --- | --- | --- | --- |
@@ -82,7 +97,7 @@ docker run \
   ...
 ```
 
-`/camera/`, `/camera/v1/status`와 `/camera/v1/stream`은 설정으로 바꾸지 않는 고정 경로다.
+`/camera/v1/status`와 `/camera/v1/stream`은 설정으로 바꾸지 않는 고정 경로다.
 Bundled edge bridge는 1920 x 1080, 30 FPS와 최대 4,194,304 byte JPEG만 허용한다. Bridge를
 사용할 때 profile의 해당 값은 기본 계약을 유지해야 한다.
 
@@ -103,8 +118,9 @@ NVIDIA_DRIVER_CAPABILITIES=graphics,utility
 ```
 
 `auto`는 지원하는 VTK(Visualization Toolkit) render window 중 현재 활성 window를 허용한다.
-`osmesa`와 `egl`은 실제 window가 요청한 backend와 다르면 첫 합성 frame 렌더링을 오류로 처리한다. GPU
-장애 시 `osmesa`, `vtkOSOpenGLRenderWindow`와 `LIBGL_ALWAYS_SOFTWARE=1`로 되돌린다.
+`osmesa`와 `egl`은 실제 window가 요청한 backend와 다르면 첫 합성 frame 렌더링을 오류로
+처리한다. GPU 장애 시 `osmesa`, `vtkOSOpenGLRenderWindow`와
+`LIBGL_ALWAYS_SOFTWARE=1`로 되돌린다.
 
 Renderer가 직접 읽는 환경 변수는 다음 2개다. Repository의 `.env.example`은 CPU 기본값을
 포함한다.
@@ -135,23 +151,22 @@ Bridge는 최신 frame 1개만 보관하고 절대 deadline을 기준으로 V4L2
 
 Bridge는 URL의 credential, query, `wss://`와 계약 이외 경로를 거부한다. Visualizer와
 bridge에는 application credential, 인증과 TLS(Transport Layer Security)가 없으므로 Docker
-secret을 주입할 항목도 없다. TCP 17000, HTTP 18000과 WebSocket은 외부에 직접 공개하지
-않고 접근이 제한된 개발 network에서만 제공한다.
+secret을 주입할 항목도 없다. TCP 17000, HTTP 18000과 WebSocket은 신뢰된 개발 network에서
+제공한다.
 
 ### 서비스 경로와 상태
 
-Visualizer HTTP와 WebSocket 경로는 6개다.
+Visualizer HTTP와 WebSocket 경로는 5개다.
 
 | 경로 | 응답 |
 | --- | --- |
-| `GET /` | 고정 사선 3D 화면과 상태를 표시하는 웹페이지 |
+| `GET /` | 고정 사선 3D 화면, 합성 camera live 영상과 상태를 함께 표시하는 웹페이지 |
 | `GET /frame.png` | 최신 Browser용 PNG frame |
 | `GET /status` | 수신, 렌더링과 합성 camera 상태 JSON |
-| `GET /camera/` | 같은 MJPEG stream을 표시하는 합성 camera live 페이지 |
 | `GET /camera/v1/status` | 합성 camera 상태 JSON |
 | `WebSocket /camera/v1/stream` | Descriptor 1개와 최신 MJPEG binary frame |
 
-Camera 관련 3개 경로는 합성 camera를 활성화한 경우에만 제공한다.
+Camera 관련 2개 경로는 합성 camera를 활성화한 경우에만 제공한다.
 
 `/status`의 `received_sequence`와 `rendered_sequence`가 같으면 최신 수신 관찰이 Browser
 화면에 반영된 상태다. `synthetic_camera`의 `camera_rendered_sequence`, frame 수와 오류는
@@ -164,7 +179,7 @@ Camera 관련 3개 경로는 합성 camera를 활성화한 경우에만 제공�
 {"type":"camera_stream_descriptor","version":1,"format":"MJPEG","width":1920,"height":1080,"fps":30,"max_frame_bytes":4194304}
 ```
 
-이후 message는 완전한 JPEG binary 1개다. `/camera/` Browser와 edge bridge는 같은
+이후 message는 완전한 JPEG binary 1개다. 루트 Browser 화면과 edge bridge는 같은
 WebSocket을 사용하며 동시 camera client는 최대 4개다. 보간과 frame 교체 정책의 상세
 계약은 [합성 카메라 Live 계약](SYNTHETIC_CAMERA_VIDEO.md)에서 관리한다.
 
@@ -188,7 +203,7 @@ python3 tools/generate_edge_bridge_notices.py --check
 cargo audit --file edge-bridge/Cargo.lock
 scripts/check-deployment.sh
 docker build \
-  --file Dockerfile.edge-bridge \
+  --file edge-bridge/Dockerfile \
   --target test \
   --tag scrap-monitoring-visualizer-edge-bridge:test \
   .
@@ -206,18 +221,20 @@ Ubuntu 계열 Linux ARM64, Docker Engine, Docker Compose plugin, `curl`, `tar`, 
 현재 kernel header와 root 권한이 필요하다. 90 frame 검사는 edge device에 FFmpeg와
 `ffprobe`가 있어야 한다.
 
-최신 Release의 checksum과 배포 bundle을 server와 edge device에서 각각 내려받는다.
+배포할 Release tag를 고정하고 checksum과 배포 bundle을 server와 edge device에서 각각
+내려받는다.
 
 ```bash
 set -euo pipefail
+RELEASE_TAG=v2.0.0
 DOWNLOAD_DIRECTORY="$(mktemp -d)"
 DEPLOYMENT_DIRECTORY="$(mktemp -d)"
 curl --fail --location --silent --show-error \
   --output "$DOWNLOAD_DIRECTORY/deployment.tar.gz" \
-  https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/latest/download/deployment.tar.gz
+  "https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/download/$RELEASE_TAG/deployment.tar.gz"
 curl --fail --location --silent --show-error \
   --output "$DOWNLOAD_DIRECTORY/SHA256SUMS" \
-  https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/latest/download/SHA256SUMS
+  "https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/download/$RELEASE_TAG/SHA256SUMS"
 (
   cd "$DOWNLOAD_DIRECTORY"
   grep ' deployment.tar.gz$' SHA256SUMS | sha256sum --check -
@@ -235,11 +252,11 @@ asset의 불변 digest 참조를 사용한다.
 ```bash
 VISUALIZER_IMAGE="$(
   curl --fail --location --silent --show-error \
-    https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/latest/download/oci-image.txt
+    "https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/download/$RELEASE_TAG/oci-image.txt"
 )"
 EDGE_BRIDGE_IMAGE="$(
   curl --fail --location --silent --show-error \
-    https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/latest/download/edge-bridge-oci-image.txt
+    "https://github.com/ajin-scrap-monitoring/scrap-monitoring-visualizer/releases/download/$RELEASE_TAG/edge-bridge-oci-image.txt"
 )"
 ```
 
@@ -247,14 +264,13 @@ EDGE_BRIDGE_IMAGE="$(
 
 환경 파일을 만들고 image 참조, server의 Tailnet IPv4 주소와 합성 camera 설정을 입력한다.
 기본 profile은 `SCRAP_MONITORING_VISUALIZER_CAMERA_PROFILE`을 빈 값으로 둔다. 서비스에는
-인증과 TLS(Transport Layer Security)가 없으므로 public 또는 전체 interface 주소에
-publish하지 않는다.
+인증과 TLS(Transport Layer Security)가 없으므로 신뢰된 개발 network에서 실행한다.
 
 Server bundle의 Container endpoint는 TCP `0.0.0.0:17000`과 HTTP `0.0.0.0:18000`으로
-고정한다. `.env.example`의 4개 endpoint 값을 바꾸지 않는다. Host에는 설정한 Tailnet IPv4
-주소로만 두 port를 publish한다. Server bundle은 내장 camera profile을 사용하므로
-`SCRAP_MONITORING_VISUALIZER_CAMERA_PROFILE`도 빈 값으로 유지한다. 사용자 profile은 설정
-절의 직접 Container mount 경계에서 지원한다.
+고정한다. `.env.example`의 4개 endpoint 값을 바꾸지 않는다. Compose는 host IP를 지정하지
+않은 `17000:17000`과 `18000:18000` 형식으로 두 port를 host interface에 publish한다. Server
+bundle은 내장 camera profile을 사용하므로 `SCRAP_MONITORING_VISUALIZER_CAMERA_PROFILE`도
+빈 값으로 유지한다. 사용자 profile은 설정 절의 직접 Container mount 경계에서 지원한다.
 
 ```bash
 cp .env.example server.env
@@ -264,7 +280,7 @@ sed --in-place \
 ```
 
 ```dotenv
-SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS=<server-tailnet-ipv4>
+SCRAP_MONITORING_VISUALIZER_TAILNET_ADDRESS=<server-tailnet-ipv4>
 SCRAP_MONITORING_VISUALIZER_CAMERA_ENABLED=true
 SCRAP_MONITORING_VISUALIZER_CAMERA_BACKEND=osmesa
 ```
@@ -294,10 +310,19 @@ restart policy를 제거하고 중지한 뒤 `scrap-monitoring-visualizer-before
 종료 및 중단 신호를 받으면 기존 설정과 Container를 자동 복원한다. 성공 후 보존 Container는
 수동 rollback에 사용할 수 있으며 자동 시작하지 않는다.
 
-Browser에서 `http://<server-tailnet-ipv4>:18000/`을 열면 3D 화면,
-`http://<server-tailnet-ipv4>:18000/camera/`를 열면 합성 camera live 화면이 표시된다. 첫
-Observation을 받기 전에는 `GET /frame.png`가 HTTP 204를 반환하고 합성 camera는 binary
-frame을 전송하지 않는다.
+Browser에서 `http://<server-tailnet-ipv4>:18000/`을 열면 3D 화면과 합성 camera live 영상이
+한 페이지에 표시된다. 첫 Observation을 받기 전에는 `GET /frame.png`가 HTTP 204를 반환하고
+합성 camera는 binary frame을 전송하지 않는다.
+
+SSH로 접속하는 개발자는 server loopback을 local port로 전달할 수 있다.
+
+```bash
+ssh -N \
+  -L 127.0.0.1:18000:127.0.0.1:18000 \
+  <server-user>@<server-host>
+```
+
+Port forwarding이 유지되는 동안 `http://127.0.0.1:18000/`에서 같은 화면을 확인한다.
 
 ### LiDAR simulator
 
@@ -327,6 +352,19 @@ cargo run --manifest-path "$SIMULATOR_ROOT/Cargo.toml" --locked -- run \
 전체 배포 절차는 해당 Repository의 `docs/deployment.md`가 정본이다.
 
 ### Edge bridge
+
+Edge host의 Docker가 memory cgroup을 지원하는지 확인한다.
+
+```bash
+grep -w memory /sys/fs/cgroup/cgroup.controllers
+docker info --format '{{.MemoryLimit}} {{.SwapLimit}}'
+```
+
+Raspberry Pi에서 memory controller가 보이지 않으면 `/boot/firmware/cmdline.txt`의 기존
+한 줄에서 `cgroup_disable=memory`를 제거하고 `cgroup_enable=memory`를 추가한 뒤 재부팅한다.
+재부팅 뒤 첫 명령의 출력에 `memory`가 있고 두 번째 명령이 `true true`인지 확인한다.
+Compose가 기존 Container를 재사용하면 memory 제한이 갱신되지 않으므로 bridge Container를
+다시 생성한다.
 
 Edge host에서 dedicated virtual camera를 한 번 설정한다.
 
@@ -360,7 +398,7 @@ Bridge를 실행하고 virtual camera의 형식, cadence와 decode 가능 여부
 docker compose \
   --env-file deploy/edge/.env \
   --file deploy/edge/compose.yml \
-  up --detach
+  up --detach --force-recreate
 docker compose \
   --env-file deploy/edge/.env \
   --file deploy/edge/compose.yml \

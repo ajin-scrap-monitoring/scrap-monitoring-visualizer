@@ -30,7 +30,7 @@ mapfile -t image_settings < <(
   sed -n 's/^SCRAP_MONITORING_VISUALIZER_IMAGE=//p' "$environment_path"
 )
 mapfile -t address_settings < <(
-  sed -n 's/^SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS=//p' "$environment_path"
+  sed -n 's/^SCRAP_MONITORING_VISUALIZER_TAILNET_ADDRESS=//p' "$environment_path"
 )
 if [[ "${#image_settings[@]}" -ne 1 || \
       ! "${image_settings[0]}" =~ ^ghcr\.io/ajin-scrap-monitoring/scrap-monitoring-visualizer@sha256:[0-9a-f]{64}$ ]]; then
