@@ -1,5 +1,6 @@
 services:
   visualizer:
+    container_name: scrap-monitoring-visualizer
     image: ${SCRAP_MONITORING_VISUALIZER_IMAGE:?release image digest is required}
     command:
       - live

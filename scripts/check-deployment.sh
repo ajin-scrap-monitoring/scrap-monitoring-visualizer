@@ -27,6 +27,8 @@ for port in 17000 18000; do
   grep --quiet --fixed-strings "target: $port" <<< "$server_config"
   grep --quiet --fixed-strings "published: \"$port\"" <<< "$server_config"
 done
+grep --quiet --fixed-strings \
+  'container_name: scrap-monitoring-visualizer' <<< "$server_config"
 if grep --quiet --fixed-strings 'host_ip:' <<< "$server_config"; then
   echo "server ports must not restrict the host interface" >&2
   exit 1
@@ -40,3 +42,11 @@ docker compose \
   --env-file deploy/edge/.env.example \
   --file deploy/edge/compose.yml \
   config --quiet
+edge_config="$(
+  docker compose \
+    --env-file deploy/edge/.env.example \
+    --file deploy/edge/compose.yml \
+    config
+)"
+grep --quiet --fixed-strings \
+  'container_name: scrap-monitoring-visualizer-edge-bridge' <<< "$edge_config"

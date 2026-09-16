@@ -22,7 +22,7 @@
 `docs/project-spec.md`는 고정 입력이므로 수정하지 않는다. 현재 제품 결정과 다른 고정 명세
 항목은 이 계획에서 완료 조건으로 사용하지 않는다.
 
-Release target은 `v2.0.0`이며 CI(Continuous Integration), CodeQL, 두 image의 릴리스 정책
+Release target은 `v2.0.1`이며 CI(Continuous Integration), CodeQL, 두 image의 릴리스 정책
 검사와 실제 90 frame 검증을 완료 조건으로 사용한다.
 
 ## 단계와 선행 관계
@@ -139,7 +139,7 @@ P8 완료 조건은 다음 7개다.
 1. PR의 필수 `CI`와 CodeQL 검사 통과
 2. 원격 `main` squash merge와 이슈 및 Project 상태 완료
 3. Release 전 version, tag ancestry, 두 image platform, SBOM과 provenance logic 재검토
-4. `v2.0.0` tag 1개를 통한 GitHub Release와 Public GHCR image 2개 게시
+4. `v2.0.1` tag 1개를 통한 GitHub Release와 Public GHCR image 2개 게시
 5. Release asset digest를 사용하는 AMD64 server와 ARM64 edge device 배포
 6. Edge V4L2 camera의 MJPEG 1920 x 1080 frame 90개를 2.5 s부터 5 s 안에 수신하고 decode
 7. 연결 중단과 재연결, camera 상태, server 및 edge 자원 사용 확인

@@ -18,6 +18,13 @@ V4L2(Video4Linux2) output에 기록하며 renderer와 Python runtime을 포함�
 layer에 저장하지 않는다. 로그는 표준 출력과 표준 오류로만 기록하고 Docker log rotation을
 설정한다.
 
+배포된 Container 이름은 다음 2개로 고정한다.
+
+| Runtime | Container 이름 |
+| --- | --- |
+| Visualizer server | `scrap-monitoring-visualizer` |
+| Edge bridge | `scrap-monitoring-visualizer-edge-bridge` |
+
 환경 변수 주입, image digest 조회, server 실행과 edge Compose 절차는
 [README](../README.md)의 배포 절을 따른다.
 

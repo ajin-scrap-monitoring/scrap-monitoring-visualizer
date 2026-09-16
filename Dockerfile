@@ -31,7 +31,7 @@ COPY --from=builder --chown=visualizer:visualizer /app /app
 COPY --chown=visualizer:visualizer THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 
 ARG BUILD_REVISION=unknown
-ARG BUILD_VERSION=2.0.0
+ARG BUILD_VERSION=2.0.1
 
 LABEL org.opencontainers.image.description="Headless 3D visualizer for Scrap Monitoring LiDAR observations" \
       org.opencontainers.image.revision="${BUILD_REVISION}" \

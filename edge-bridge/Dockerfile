@@ -25,7 +25,7 @@ RUN cargo build --locked --release \
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG BUILD_REVISION=unknown
-ARG BUILD_VERSION=2.0.0
+ARG BUILD_VERSION=2.0.1
 
 LABEL org.opencontainers.image.description="Bounded WebSocket to V4L2 bridge for the Scrap synthetic camera" \
       org.opencontainers.image.revision="${BUILD_REVISION}" \

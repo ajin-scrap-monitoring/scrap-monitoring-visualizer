@@ -173,21 +173,34 @@ legacy_container_id="$(
     --filter name='^/scrap-monitoring-visualizer$'
 )"
 if [[ -n "$legacy_container_id" ]]; then
-  legacy_backup_name="scrap-monitoring-visualizer-before-systemd-${legacy_container_id:0:12}"
-  legacy_restart_policy="$(
-    docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$legacy_container_id"
+  container_compose_project="$(
+    docker inspect \
+      --format '{{ index .Config.Labels "com.docker.compose.project" }}' \
+      "$legacy_container_id"
   )"
-  legacy_restart_maximum="$(
-    docker inspect --format '{{.HostConfig.RestartPolicy.MaximumRetryCount}}' "$legacy_container_id"
+  container_compose_service="$(
+    docker inspect \
+      --format '{{ index .Config.Labels "com.docker.compose.service" }}' \
+      "$legacy_container_id"
   )"
-  legacy_restart_argument="${legacy_restart_policy:-no}"
-  if [[ "$legacy_restart_argument" == "on-failure" && \
-        "$legacy_restart_maximum" -gt 0 ]]; then
-    legacy_restart_argument+="${legacy_restart_argument:+:}$legacy_restart_maximum"
+  if [[ "$container_compose_project" != "scrap-monitoring-visualizer" || \
+        "$container_compose_service" != "visualizer" ]]; then
+    legacy_backup_name="scrap-monitoring-visualizer-before-systemd-${legacy_container_id:0:12}"
+    legacy_restart_policy="$(
+      docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$legacy_container_id"
+    )"
+    legacy_restart_maximum="$(
+      docker inspect --format '{{.HostConfig.RestartPolicy.MaximumRetryCount}}' "$legacy_container_id"
+    )"
+    legacy_restart_argument="${legacy_restart_policy:-no}"
+    if [[ "$legacy_restart_argument" == "on-failure" && \
+          "$legacy_restart_maximum" -gt 0 ]]; then
+      legacy_restart_argument+="${legacy_restart_argument:+:}$legacy_restart_maximum"
+    fi
+    docker update --restart=no "$legacy_container_id"
+    docker stop --time 15 "$legacy_container_id"
+    docker rename "$legacy_container_id" "$legacy_backup_name"
   fi
-  docker update --restart=no "$legacy_container_id"
-  docker stop --time 15 "$legacy_container_id"
-  docker rename "$legacy_container_id" "$legacy_backup_name"
 fi
 
 systemctl daemon-reload

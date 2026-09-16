@@ -97,6 +97,9 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         cls.server_compose = (cls.root / "deploy/server/compose.yml").read_text(
             encoding="utf-8"
         )
+        cls.edge_compose = (cls.root / "deploy/edge/compose.yml").read_text(
+            encoding="utf-8"
+        )
         cls.server_service = (
             cls.root / "deploy/server/scrap-monitoring-visualizer.service"
         ).read_text(encoding="utf-8")
@@ -243,6 +246,26 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
     def test_server_setup_rolls_back_after_session_disconnect(self):
         self.assertIn("trap 'rollback 129' HUP", self.server_setup)
         self.assertEqual(self.server_setup.count("trap - ERR HUP INT TERM"), 2)
+
+    def test_deployment_uses_stable_container_names_and_unrestricted_host_ports(self):
+        self.assertIn(
+            "container_name: scrap-monitoring-visualizer\n", self.server_compose
+        )
+        self.assertIn(
+            "container_name: scrap-monitoring-visualizer-edge-bridge\n",
+            self.edge_compose,
+        )
+        self.assertNotIn("host_ip:", self.server_compose)
+        self.assertIn("- 18000:18000\n", self.server_compose)
+
+    def test_server_setup_preserves_its_compose_managed_container(self):
+        self.assertIn("com.docker.compose.project", self.server_setup)
+        self.assertIn("com.docker.compose.service", self.server_setup)
+        self.assertIn(
+            '"$container_compose_project" != "scrap-monitoring-visualizer"',
+            self.server_setup,
+        )
+        self.assertIn('"$container_compose_service" != "visualizer"', self.server_setup)
 
     def test_candidate_is_manual_and_requires_current_main(self):
         trigger = self.candidate.split("permissions:", maxsplit=1)[0]
