@@ -42,7 +42,7 @@ def test_edge_bridge_release_inputs_are_locked() -> None:
     }
     assert package_identity in locked_packages
 
-    dockerfile = (root / "Dockerfile.edge-bridge").read_text(encoding="utf-8")
+    dockerfile = (root / "edge-bridge/Dockerfile").read_text(encoding="utf-8")
     for command in (
         "cargo fmt --all -- --check",
         "cargo clippy --locked --all-targets --all-features -- -D warnings",

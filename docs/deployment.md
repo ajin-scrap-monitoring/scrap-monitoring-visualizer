@@ -51,7 +51,7 @@ Server의 지속 배포 파일은 다음 5개다.
 
 | 설정 파일 | 역할 |
 | --- | --- |
-| `deploy/server/compose.yml` | 비root Container, 자원과 Tailnet port binding |
+| `deploy/server/compose.yml` | 비root Container, 자원과 host port binding |
 | `deploy/server/compose.gpu.yml` | NVIDIA GPU device 요청 |
 | `deploy/server/run.sh` | 선택한 Compose 구성의 foreground 수명 주기 |
 | `deploy/server/scrap-monitoring-visualizer.service` | Tailscale 준비 이후 실행과 재시작 |
@@ -62,14 +62,21 @@ Server Container에는 Docker restart policy를 설정하지 않는다. Systemd�
 재시작한다. Docker가 boot 중 Tailnet 주소 생성 전에 Container를 복원하지 않는다.
 Docker daemon이 재시작되어 Compose process가 종료되어도 systemd의 재시작 loop가 daemon
 복귀 뒤 Container를 다시 시작한다.
-Container endpoint는 TCP `0.0.0.0:17000`과 HTTP `0.0.0.0:18000`으로 고정하며 host에는
-Tailnet IPv4 주소로만 publish한다.
+Container endpoint는 TCP `0.0.0.0:17000`과 HTTP `0.0.0.0:18000`으로 고정한다. Compose는
+host IP를 지정하지 않고 host의 17000과 18000에 publish한다. 원격 loopback의 HTTP port는
+SSH local port forwarding 대상이다.
 
 ## Edge runtime
 
 Edge bridge Container는 Docker bridge network, read-only root, capability 없음, process
 32개, memory 64 MiB와 CPU 0.25개 제한을 사용한다. Host `/dev/video42`만 Container의 설정된
 synthetic camera 경로로 전달하고 host `video` group GID를 supplemental group으로 추가한다.
+
+Edge host의 cgroup v2 controller 목록에는 `memory`가 있어야 하며 Docker의 `MemoryLimit`과
+`SwapLimit`은 모두 `true`여야 한다. Memory controller가 보이지 않으면 Raspberry Pi의
+`/boot/firmware/cmdline.txt`에서 `cgroup_disable=memory`를 제거하고 기존 한 줄에
+`cgroup_enable=memory`를 추가한 뒤 재부팅한다. 이 설정을 바꾼 뒤에는 Compose가 bridge
+Container를 다시 생성해야 64 MiB memory 제한을 적용한다.
 
 Edge host는 Container 실행 전에 다음 5개 지속 설정을 한 번 적용한다.
 
@@ -120,15 +127,16 @@ cargo install --locked --version 0.22.2 cargo-audit
 python3 tools/generate_edge_bridge_notices.py --check
 cargo audit --file edge-bridge/Cargo.lock
 docker build \
-  --file Dockerfile.edge-bridge \
+  --file edge-bridge/Dockerfile \
   --target test \
   --tag scrap-monitoring-visualizer-edge-bridge:test \
   .
 ```
 
 CI(Continuous Integration)는 QEMU와 Buildx로 Linux ARM64 runtime image까지 빌드한다. 실제
-V4L2 device 검증은 ARM64 edge host에서 Release digest image를 실행한 뒤
-`deploy/edge/check-90-frames.sh`로 수행한다.
+V4L2 device의 90 frame cadence, decode, 연속 sequence와 monotonic EOF timestamp 검증은
+ARM64 edge host에서 Release digest image를 실행한 뒤 `deploy/edge/check-90-frames.sh`로
+수행한다.
 
 ## 릴리스 정책
 

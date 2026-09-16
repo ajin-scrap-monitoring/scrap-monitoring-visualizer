@@ -185,8 +185,10 @@ def test_preview_http_endpoints_return_latest_frame() -> None:
             status, _, body = await _request(port, "/")
             assert status == 200
             assert b"/frame.png?revision=" in body
-            assert b'href="/camera/"' in body
-            assert body.count(b"<img ") == 1
+            assert b'href="/camera/"' not in body
+            assert b'new URL("/camera/v1/stream"' in body
+            assert body.count(b"<img ") == 2
+            assert b'class="views"' in body
             assert b"status.frame_revision!==displayedRevision" in body
         finally:
             server.should_exit = True

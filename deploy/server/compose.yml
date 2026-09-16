@@ -6,8 +6,8 @@ services:
     env_file:
       - ${SCRAP_MONITORING_VISUALIZER_ENV_FILE:-/etc/scrap-monitoring-visualizer/server.env}
     ports:
-      - ${SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS:?Tailnet publish address is required}:17000:17000
-      - ${SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS:?Tailnet publish address is required}:18000:18000
+      - 17000:17000
+      - 18000:18000
     init: true
     read_only: true
     cap_drop:

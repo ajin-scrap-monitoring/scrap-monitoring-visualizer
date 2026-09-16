@@ -24,7 +24,7 @@ Python server는 `src/scrap_monitoring_visualizer/` 아래의 다음 9개 경계
 | `geometry/` | 경계 삼각분할, 표면 clipping과 결정론적 mesh |
 | `rendering/` | Browser용 직교투영 장면과 PNG frame |
 | `preview/` | HTTP(Hypertext Transfer Protocol) 상태, PNG와 Browser 화면 |
-| `synthetic_camera/` | Profile, 보간, 원근 장면, camera page, JPEG와 WebSocket stream |
+| `synthetic_camera/` | Profile, 보간, 원근 장면, JPEG와 WebSocket stream |
 | `dependency_audit.py` | Server image의 version과 license notice inventory |
 
 `contracts/` 자료형을 geometry와 두 renderer가 공유한다. `geometry/`는 수치 mesh를 반환하고
@@ -97,7 +97,7 @@ Synthetic worker에 독립적으로 제출한다. 두 renderer가 느려져도 R
 정책으로 입력을 계속 처리한다.
 
 ```text
-Generator -> Receiver -> Validator -> Latest State
+Simulator -> Receiver -> Validator -> Latest State
                                         |       |
                                         v       v
                                   Browser Job  Camera Timeline
@@ -176,8 +176,9 @@ frame은 1280 x 720이다. Scrap은 높이에 따른 노랑, 주황과 적색을
 
 Synthetic renderer는 같은 geometry에 원근 camera, PBR 재질, 조명, seeded scrap 색
 variation, noise와 vignette를 적용한다. Profile 좌표는 Header 경계 중심, 바닥 높이와 최대
-scene span으로 변환한다. 현재 투입구에 chute를 만들고 현재 투입구가 없으면 첫 번째
-투입구를 사용한다.
+scene span으로 변환한다. Chute 상단 mount는 투입구 좌표 평균에 고정한다. 하단 outlet의
+중심은 현재 투입구 좌표에 두고 투입구 index가 증가할 때 시계방향 자세를 선택한다. 현재
+투입구가 없으면 첫 번째 투입구를 사용한다.
 
 첫 Observation은 exact frame이다. 연속 sequence, 같은 run과 격자, 증가하는 시각과 최대
 2 s 간격을 만족하면 높이와 연속 scenario 수치를 선형 보간한다. 경계를 넘는 구간은 오른쪽
@@ -189,21 +190,21 @@ encoding한다. JPEG는 filesystem에 기록하지 않는다.
 
 ## 서비스 인터페이스
 
-Visualizer가 제공하는 endpoint는 다음 6개다.
+Visualizer가 제공하는 endpoint는 다음 5개다.
 
 | Endpoint | 응답 |
 | --- | --- |
-| `GET /` | Server frame과 상태를 표시하는 Browser 화면 |
+| `GET /` | Server frame, 합성 camera live 영상과 상태를 함께 표시하는 Browser 화면 |
 | `GET /frame.png` | 최신 직교투영 PNG와 revision, 준비 전 204 |
 | `GET /status` | 연결, Observation, 두 renderer와 camera 상태 |
-| `GET /camera/` | 같은 WebSocket을 사용하는 합성 camera Browser 화면 |
 | `GET /camera/v1/status` | Camera pipeline 상태 |
 | `WebSocket /camera/v1/stream` | Descriptor text 1개 뒤 최신 JPEG binary |
 
-Camera 관련 3개 endpoint는 synthetic camera를 활성화한 경우에만 설치한다.
+Camera 관련 2개 endpoint는 synthetic camera를 활성화한 경우에만 설치한다.
 
-Browser는 상태를 0.5 s마다 조회하고 revision이 바뀐 경우에만 PNG를 요청한다. HTTP 요청은
-보관한 최신 frame과 상태만 읽으며 렌더링을 직접 시작하지 않는다.
+Browser는 상태를 0.5 s마다 조회하고 revision이 바뀐 경우에만 PNG를 요청한다. 합성 camera가
+활성화되면 같은 화면에서 camera WebSocket을 연결한다. HTTP 요청은 보관한 최신 frame과
+상태만 읽으며 렌더링을 직접 시작하지 않는다.
 
 Camera Browser와 edge bridge는 최대 4개 client를 허용하는 같은 WebSocket을 사용한다.
 Server는 최신 JPEG를 profile FPS에 맞춰 각 client에 반복 전송하므로 전송 cadence와 고유

@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import uvicorn
 from fastapi import FastAPI, WebSocketDisconnect
-from fastapi.routing import APIRoute, APIWebSocketRoute
+from fastapi.routing import APIWebSocketRoute
 from websockets.asyncio.client import connect
 
 from scrap_monitoring_visualizer.synthetic_camera import (
@@ -88,27 +88,15 @@ def test_camera_websocket_sends_exact_descriptor_then_latest_jpeg() -> None:
     asyncio.run(exercise())
 
 
-def test_camera_page_uses_the_shared_live_websocket() -> None:
-    async def exercise() -> None:
-        app = FastAPI()
-        install_camera_routes(
-            app,
-            LatestJpegStore(),
-            lambda: {"camera_width": 1920, "camera_height": 1080},
-        )
-        route = next(
-            route
-            for route in app.routes
-            if isinstance(route, APIRoute) and route.path == "/camera/"
-        )
+def test_camera_routes_do_not_install_a_standalone_page() -> None:
+    app = FastAPI()
+    install_camera_routes(
+        app,
+        LatestJpegStore(),
+        lambda: {"camera_width": 1920, "camera_height": 1080},
+    )
 
-        response = await route.endpoint()
-
-        assert response.status_code == 200
-        assert b'new URL("v1/stream",window.location.href)' in response.body
-        assert b"Live synthetic camera frame" in response.body
-
-    asyncio.run(exercise())
+    assert all(getattr(route, "path", None) != "/camera/" for route in app.routes)
 
 
 def test_camera_websocket_repeats_latest_jpeg_at_device_cadence() -> None:

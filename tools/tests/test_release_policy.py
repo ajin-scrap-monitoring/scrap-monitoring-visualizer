@@ -103,6 +103,9 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         cls.server_setup = (cls.root / "deploy/server/setup.sh").read_text(
             encoding="utf-8"
         )
+        cls.example_environment = (cls.root / ".env.example").read_text(
+            encoding="utf-8"
+        )
 
     def assert_strict_attestation_verification(self, workflow: str) -> None:
         self.assertNotIn("--format '{{json .SBOM}}'", workflow)
@@ -128,7 +131,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("    name: CI\n", self.ci)
         self.assertIn("    timeout-minutes: 45\n", self.ci)
         self.assertIn("--target test", self.ci)
-        self.assertIn("file: Dockerfile.edge-bridge", self.ci)
+        self.assertIn("file: edge-bridge/Dockerfile", self.ci)
         self.assertIn("platforms: linux/arm64", self.ci)
         self.assertIn("target: runtime", self.ci)
 
@@ -170,7 +173,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
     def test_release_publishes_two_attested_platform_images(self):
         self.assertIn("platforms: linux/amd64", self.release)
         self.assertIn("platforms: linux/arm64", self.release)
-        self.assertIn("file: Dockerfile.edge-bridge", self.release)
+        self.assertIn("file: edge-bridge/Dockerfile", self.release)
         self.assertEqual(self.release.count("provenance: mode=max"), 2)
         self.assertEqual(self.release.count("sbom: true"), 2)
         self.assert_strict_attestation_verification(self.release)
@@ -225,6 +228,14 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
     def test_server_lifecycle_waits_for_tailnet_before_foreground_compose(self):
         self.assertIn("tailscale wait --timeout=120s", self.server_service)
         self.assertIn("tailscale ip --assert=", self.server_service)
+        self.assertIn(
+            "SCRAP_MONITORING_VISUALIZER_TAILNET_ADDRESS",
+            self.example_environment,
+        )
+        self.assertNotIn(
+            "SCRAP_MONITORING_VISUALIZER_PUBLISH_ADDRESS",
+            self.example_environment + self.server_service + self.server_setup,
+        )
         self.assertIn("run-visualizer start", self.server_service)
         self.assertIn("Restart=always", self.server_service)
         self.assertIn('restart: "no"', self.server_compose)

@@ -19,7 +19,9 @@ def test_default_camera_profile_is_packaged_and_valid() -> None:
         30,
     )
     assert config.video.max_frame_bytes == 4_194_304
-    assert config.camera.view_angle_deg == 52.0
+    assert config.camera.position_normalized == (0.0, -0.485, 1.36)
+    assert config.camera.target_normalized == (0.0, 0.125, 0.75)
+    assert config.camera.view_angle_deg == 45.0
     assert config.scrap_material.metallic > config.wall_material.metallic
 
 
