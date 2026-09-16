@@ -226,7 +226,7 @@ Ubuntu 계열 Linux ARM64, Docker Engine, Docker Compose plugin, `curl`, `tar`, 
 
 ```bash
 set -euo pipefail
-RELEASE_TAG=v2.0.0
+RELEASE_TAG=v2.0.1
 DOWNLOAD_DIRECTORY="$(mktemp -d)"
 DEPLOYMENT_DIRECTORY="$(mktemp -d)"
 curl --fail --location --silent --show-error \
@@ -269,8 +269,9 @@ EDGE_BRIDGE_IMAGE="$(
 Server bundle의 Container endpoint는 TCP `0.0.0.0:17000`과 HTTP `0.0.0.0:18000`으로
 고정한다. `.env.example`의 4개 endpoint 값을 바꾸지 않는다. Compose는 host IP를 지정하지
 않은 `17000:17000`과 `18000:18000` 형식으로 두 port를 host interface에 publish한다. Server
-bundle은 내장 camera profile을 사용하므로 `SCRAP_MONITORING_VISUALIZER_CAMERA_PROFILE`도
-빈 값으로 유지한다. 사용자 profile은 설정 절의 직접 Container mount 경계에서 지원한다.
+Container 이름은 `scrap-monitoring-visualizer`로 고정한다. Server bundle은 내장 camera
+profile을 사용하므로 `SCRAP_MONITORING_VISUALIZER_CAMERA_PROFILE`도 빈 값으로 유지한다.
+사용자 profile은 설정 절의 직접 Container mount 경계에서 지원한다.
 
 ```bash
 cp .env.example server.env
@@ -304,11 +305,12 @@ sudo deploy/server/setup.sh server.env --gpu
 시작한다. Docker Container에는 restart policy를 주지 않고 systemd가 수명 주기를 관리하므로
 Docker가 Tailscale 주소보다 먼저 Container를 복원하지 않는다.
 
-`setup.sh`는 실행 중인 기존 `scrap-monitoring-visualizer` standalone Container가 있으면
-restart policy를 제거하고 중지한 뒤 `scrap-monitoring-visualizer-before-systemd-<id>`로
-이름을 바꿔 보존한다. 새 digest Container가 정상 상태가 되지 않거나 설치 프로세스가 세션
-종료 및 중단 신호를 받으면 기존 설정과 Container를 자동 복원한다. 성공 후 보존 Container는
-수동 rollback에 사용할 수 있으며 자동 시작하지 않는다.
+`setup.sh`는 Compose 관리 label이 없는 실행 중인 기존 `scrap-monitoring-visualizer`
+standalone Container가 있으면 restart policy를 제거하고 중지한 뒤
+`scrap-monitoring-visualizer-before-systemd-<id>`로 이름을 바꿔 보존한다. 새 digest
+Container가 정상 상태가 되지 않거나 설치 프로세스가 세션 종료 및 중단 신호를 받으면 기존
+설정과 Container를 자동 복원한다. 성공 후 보존 Container는 수동 rollback에 사용할 수
+있으며 자동 시작하지 않는다.
 
 Browser에서 `http://<server-tailnet-ipv4>:18000/`을 열면 3D 화면과 합성 camera live 영상이
 한 페이지에 표시된다. 첫 Observation을 받기 전에는 `GET /frame.png`가 HTTP 204를 반환하고
@@ -393,6 +395,7 @@ SCRAP_SYNTHETIC_CAMERA_SERVER_URL=ws://<server-tailnet-ipv4>:18000/camera/v1/str
 ```
 
 Bridge를 실행하고 virtual camera의 형식, cadence와 decode 가능 여부를 확인한다.
+Container 이름은 `scrap-monitoring-visualizer-edge-bridge`로 고정한다.
 
 ```bash
 docker compose \

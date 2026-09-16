@@ -1,5 +1,6 @@
 services:
   synthetic-camera-bridge:
+    container_name: scrap-monitoring-visualizer-edge-bridge
     image: ${SCRAP_SYNTHETIC_CAMERA_BRIDGE_IMAGE:?release image digest is required}
     environment:
       SCRAP_SYNTHETIC_CAMERA_SERVER_URL: ${SCRAP_SYNTHETIC_CAMERA_SERVER_URL:?server URL is required}

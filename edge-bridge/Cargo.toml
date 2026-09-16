@@ -1,6 +1,6 @@
 [package]
 name = "scrap-synthetic-camera-bridge"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 rust-version = "1.96"
 description = "Bounded WebSocket to V4L2 bridge for the Scrap synthetic camera"
